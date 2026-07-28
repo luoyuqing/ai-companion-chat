@@ -8,7 +8,7 @@ import { askAssistant, streamAssistant, StreamChunk } from "./services/llm";
 import { synthesizeSpeech } from "./services/tts";
 import { transcribeSpeechAudio } from "./services/transcription";
 import { inferEmotion } from "./services/emotion";
-import { appendToSession, buildSessionContext, clearSession, loadSession, makeSessionId } from "./services/session";
+import { appendToSession, buildSessionContext, clearSession, loadSession } from "./services/session";
 import {
   AvatarRenderMode,
   ChatRequestBody,
@@ -19,233 +19,46 @@ import {
   EmotionProfile
 } from "./types";
 
+// 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
+import { runChat } from "./core/chat";
+import {
+  applyCharacterPatch,
+  AUDIO_DIR,
+  AVATAR_DIR,
+  CUSTOM_FILE,
+  DATA_DIR,
+  deleteCustomHumanById,
+  deleteModelFileByName,
+  ensureRelationshipMode,
+  ensureSupportedMood,
+  getCharacters,
+  HumanOverrides,
+  loadCustomHumans,
+  loadHumanOverrides,
+  MAX_AVATAR_BYTES,
+  MAX_MODEL_BYTES,
+  MODEL_DIR,
+  normalizeAvatarType,
+  normalizeExpressionProfile,
+  normalizeHistory,
+  normalizeRelationshipMode,
+  OVERRIDE_FILE,
+  resolveCharacter,
+  sanitizeAvatarFileName,
+  sanitizeModelFileName,
+  STATIC_ASSETS_DIR,
+  writeCustomHumans,
+  writeHumanOverrides
+} from "./core/data";
+import { startTelegramBot } from "./telegram/bot";
+
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST;
-const WORKSPACE_ROOT = path.basename(process.cwd()) === "server" ? path.resolve(process.cwd(), "..") : process.cwd();
+const WEB_APP_URL = process.env.WEB_APP_URL?.trim() || "http://127.0.0.1:5173";
 
 app.use(cors());
 app.use(express.json({ limit: "30mb" }));
-
-const DATA_DIR = path.join(WORKSPACE_ROOT, "server", "src", "data");
-const CUSTOM_FILE = path.join(DATA_DIR, "custom-humans.json");
-const OVERRIDE_FILE = path.join(DATA_DIR, "human-overrides.json");
-const AUDIO_DIR = path.join(WORKSPACE_ROOT, "server", "data", "audio");
-const MODEL_DIR = path.join(WORKSPACE_ROOT, "server", "data", "models");
-const AVATAR_DIR = path.join(WORKSPACE_ROOT, "server", "data", "avatars");
-const STATIC_ASSETS_DIR = path.join(WORKSPACE_ROOT, "web", "public", "assets");
-const WEB_APP_URL = process.env.WEB_APP_URL?.trim() || "http://127.0.0.1:5173";
-const MAX_MODEL_BYTES = 25 * 1024 * 1024;
-const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
-
-type HumanOverrides = {
-  overrides: Record<string, Partial<DigitalHumanConfig>>;
-  hidden: string[];
-};
-
-async function loadHumanOverrides(): Promise<HumanOverrides> {
-  try {
-    const raw = await fs.readFile(OVERRIDE_FILE, "utf8");
-    const parsed = JSON.parse(raw) as Partial<HumanOverrides>;
-    return {
-      overrides: parsed.overrides && typeof parsed.overrides === "object" ? parsed.overrides : {},
-      hidden: Array.isArray(parsed.hidden) ? parsed.hidden.map(String) : []
-    };
-  } catch {
-    return { overrides: {}, hidden: [] };
-  }
-}
-
-async function writeHumanOverrides(data: HumanOverrides): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(OVERRIDE_FILE, JSON.stringify(data, null, 2), "utf8");
-}
-
-async function getCharacters(): Promise<DigitalHumanConfig[]> {
-  const base = await fs.readFile(path.join(DATA_DIR, "digital-humans.json"), "utf8");
-  const baseCharacters = JSON.parse(base) as DigitalHumanConfig[];
-  const custom = await loadCustomHumans();
-  const { overrides, hidden } = await loadHumanOverrides();
-  const normalize = (item: DigitalHumanConfig): DigitalHumanConfig => ({
-    ...item,
-    avatarType: normalizeAvatarType(item.avatarType),
-    emotionProfile: item.emotionProfile,
-    avatarVideoProfile: item.avatarVideoProfile
-  });
-  const mergedBase = baseCharacters
-    .filter((item) => !hidden.includes(item.id))
-    .map((item) => (overrides[item.id] ? { ...item, ...overrides[item.id], id: item.id } : item));
-  return [...mergedBase.map(normalize), ...custom.map(normalize)];
-}
-
-async function loadCustomHumans(): Promise<DigitalHumanConfig[]> {
-  try {
-    const raw = await fs.readFile(CUSTOM_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as DigitalHumanConfig[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeCustomHumans(humans: DigitalHumanConfig[]): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(CUSTOM_FILE, JSON.stringify(humans, null, 2), "utf8");
-}
-
-async function deleteCustomHumanById(characterId: string): Promise<boolean> {
-  const safeId = String(characterId || "").trim();
-  if (!safeId) {
-    return false;
-  }
-
-  const customs = await loadCustomHumans();
-  const next = customs.filter((item) => item.id !== safeId);
-  if (next.length === customs.length) {
-    return false;
-  }
-
-  await writeCustomHumans(next);
-  return true;
-}
-
-async function deleteModelFileByName(fileName: string): Promise<boolean> {
-  const safeName = path.basename(String(fileName || "").trim());
-  if (!safeName || safeName === "." || safeName === "..") {
-    return false;
-  }
-
-  try {
-    await fs.unlink(path.join(MODEL_DIR, safeName));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeHistory(history?: ChatMessage[]): ChatMessage[] {
-  return (history || [])
-    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-    .map((m) => ({
-      role: m.role,
-      content: String(m.content || "").slice(0, 1200)
-    }))
-    .filter((m) => m.content.trim().length > 0);
-}
-
-function ensureSupportedMood(mood: string | undefined): DigitalHumanConfig["defaultMood"] {
-  if (mood === "happy" || mood === "sad" || mood === "surprise" || mood === "wink" || mood === "neutral" || mood === "angry" || mood === "love") {
-    return mood;
-  }
-  return "neutral";
-}
-
-function ensureRelationshipMode(mode: unknown): DigitalHumanConfig["relationshipMode"] {
-  if (mode === "flirty" || mode === "playful" || mode === "mature" || mode === "sweet") {
-    return mode;
-  }
-  return "sweet";
-}
-
-function normalizeRelationshipMode(mode: unknown): RelationshipMode | undefined {
-  if (mode === "flirty" || mode === "playful" || mode === "mature" || mode === "sweet") {
-    return mode;
-  }
-  return undefined;
-}
-
-function normalizeExpressionProfile(raw: unknown): EmotionProfile | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-
-  const normalized: EmotionProfile = {};
-  (["happy", "sad", "surprise", "wink", "neutral", "angry", "love"] as const).forEach((emotion) => {
-    const maybeUrl = String((raw as Record<string, unknown>)[emotion] || "").trim();
-    if (maybeUrl) {
-      normalized[emotion] = maybeUrl;
-    }
-  });
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function normalizeAvatarType(raw: unknown): AvatarRenderMode {
-  return raw === "video" ? "video" : "image";
-}
-
-function sanitizeModelFileName(rawName: unknown): string {
-  const baseName = path.basename(String(rawName || "model.glb")).trim() || "model.glb";
-  const ext = path.extname(baseName).toLowerCase();
-  if (ext !== ".glb" && ext !== ".gltf") {
-    throw new Error("仅支持 .glb 或 .gltf 模型文件");
-  }
-
-  const stem = baseName
-    .slice(0, -ext.length)
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64) || "model";
-  return `${stem}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}${ext}`;
-}
-
-const AVATAR_EXT_BY_MIME: Record<string, string> = {
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/jpg": ".jpg",
-  "image/webp": ".webp",
-  "image/gif": ".gif",
-  "image/svg+xml": ".svg"
-};
-
-function sanitizeAvatarFileName(rawName: unknown, mimeType: unknown): string {
-  const baseName = path.basename(String(rawName || "avatar.png")).trim() || "avatar.png";
-  let ext = path.extname(baseName).toLowerCase();
-  const allowed = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"];
-  if (!allowed.includes(ext)) {
-    const mimeExt = AVATAR_EXT_BY_MIME[String(mimeType || "").toLowerCase().trim()];
-    if (!mimeExt) {
-      throw new Error("仅支持 png/jpg/webp/gif/svg 图片文件");
-    }
-    ext = mimeExt;
-  }
-  if (ext === ".jpeg") ext = ".jpg";
-
-  const stem = baseName
-    .slice(0, baseName.length - path.extname(baseName).length)
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64) || "avatar";
-  return `${stem}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}${ext}`;
-}
-
-function decodeBase64Payload(raw: unknown): Buffer {
-  if (typeof raw !== "string" || !raw.trim()) {
-    throw new Error("fileBase64 为必填项");
-  }
-
-  const normalized = raw.includes(",") ? raw.slice(raw.indexOf(",") + 1) : raw;
-  const buffer = Buffer.from(normalized, "base64");
-  if (!buffer.length) {
-    throw new Error("模型文件为空");
-  }
-  if (buffer.byteLength > MAX_MODEL_BYTES) {
-    throw new Error("模型文件不能超过 25MB");
-  }
-  return buffer;
-}
-
-function resolveCharacter(characters: DigitalHumanConfig[], selectedId?: string): DigitalHumanConfig | null {
-  if (selectedId) {
-    return characters.find((c) => c.id === selectedId) ?? null;
-  }
-  return characters[0] ?? null;
-}
-
-function writeSse(res: Response, event: string, payload: unknown): void {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
 
 app.get("/api/digital-humans", async (_req, res) => {
   const humans = await getCharacters();
@@ -391,9 +204,9 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
 
     const voice = typeof body.voice === "string" ? body.voice.trim() : "";
     const voiceProvider = body.voiceProvider;
+    const characters = await getCharacters();
+    const current = characters.find((item) => item.id === characterId);
     if (voice || voiceProvider !== undefined) {
-      const characters = await getCharacters();
-      const current = characters.find((item) => item.id === characterId);
       const provider =
         voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" || voiceProvider === "openai"
           ? voiceProvider
@@ -405,28 +218,7 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
       return res.status(400).json({ error: "没有可更新的字段" });
     }
 
-    // 自定义数字人：直接更新 custom-humans.json
-    const customs = await loadCustomHumans();
-    const customIdx = customs.findIndex((item) => item.id === characterId);
-    if (customIdx >= 0) {
-      customs[customIdx] = { ...customs[customIdx], ...patch, id: characterId } as DigitalHumanConfig;
-      await writeCustomHumans(customs);
-      return res.json({ human: customs[customIdx] });
-    }
-
-    // 内置数字人：写入覆盖文件
-    const base = await fs.readFile(path.join(DATA_DIR, "digital-humans.json"), "utf8");
-    const baseCharacters = JSON.parse(base) as DigitalHumanConfig[];
-    const baseHuman = baseCharacters.find((item) => item.id === characterId);
-    if (!baseHuman) {
-      return res.status(404).json({ error: "digital human not found" });
-    }
-
-    const overridesData = await loadHumanOverrides();
-    overridesData.overrides[characterId] = { ...(overridesData.overrides[characterId] || {}), ...patch };
-    delete (overridesData.overrides[characterId] as Record<string, unknown>).id;
-    await writeHumanOverrides(overridesData);
-    const merged = { ...baseHuman, ...overridesData.overrides[characterId], id: characterId } as DigitalHumanConfig;
+    const merged = await applyCharacterPatch(characterId, patch);
     res.json({ human: merged });
   } catch (error) {
     console.error(error);
@@ -437,38 +229,29 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
 app.post("/api/chat", async (req, res) => {
   try {
     const body = req.body as ChatRequestBody;
-    const sessionId = body.sessionId || makeSessionId();
     const message = String(body.message || "").trim();
     if (!message) {
       return res.status(400).json({ error: "message is required" });
     }
 
-    const characters = await getCharacters();
-    const character = resolveCharacter(characters, body.characterId);
-    if (!character) {
-      return res.status(500).json({ error: "no digital human configured" });
-    }
+    const result = await runChat({
+      sessionId: body.sessionId,
+      message,
+      characterId: body.characterId,
+      relationshipMode: normalizeRelationshipMode(body.relationshipMode)
+    });
 
-    const existingSession = await loadSession(sessionId);
-    const history = body.history?.length ? normalizeHistory(body.history) : (existingSession?.history ?? []);
     const emotionFromUser = inferEmotion(message);
-    const context = existingSession?.context;
-    const requestedRelationshipMode = normalizeRelationshipMode(body.relationshipMode);
-    const answer = await askAssistant(history, character, message, context, requestedRelationshipMode);
-    const mergedEmotion = answer.emotion || emotionFromUser;
-    const audioUrl = await synthesizeSpeech(answer.text, character);
-    const nextContext = buildSessionContext(existingSession, message, answer.text, requestedRelationshipMode);
-
-    await appendToSession(sessionId, { role: "user", content: message }, nextContext);
-    await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
+    const mergedEmotion = result.emotion || emotionFromUser;
+    const audioUrl = await synthesizeSpeech(result.text, result.character);
 
     const payload: ChatResponse = {
-      sessionId,
-      characterId: character.id,
-      text: answer.text,
-      emotion: mergedEmotion,
+      sessionId: result.sessionId,
+      characterId: result.character.id,
+      text: result.text,
+      emotion: mergedEmotion as ChatResponse["emotion"],
       audioUrl,
-      context: nextContext
+      context: result.context
     };
     res.json(payload);
   } catch (error) {
@@ -619,13 +402,11 @@ app.delete("/api/digital-humans/:id", async (req, res) => {
     return res.status(400).json({ error: "至少保留一个数字人，不能全部删除" });
   }
 
-  // 先按自定义数字人删除
   const deleted = await deleteCustomHumanById(characterId);
   if (deleted) {
     return res.json({ ok: true });
   }
 
-  // 内置数字人：加入隐藏列表（可通过清理 human-overrides.json 恢复）
   const overridesData = await loadHumanOverrides();
   if (!overridesData.hidden.includes(characterId)) {
     overridesData.hidden.push(characterId);
@@ -703,6 +484,31 @@ app.get("/", (_req, res) => {
   res.type("html").status(200).send(html);
 });
 
+function makeSessionId(): string {
+  return `sess-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function writeSse(res: Response, event: string, payload: unknown): void {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function decodeBase64Payload(raw: unknown): Buffer {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new Error("fileBase64 为必填项");
+  }
+
+  const normalized = raw.includes(",") ? raw.slice(raw.indexOf(",") + 1) : raw;
+  const buffer = Buffer.from(normalized, "base64");
+  if (!buffer.length) {
+    throw new Error("模型文件为空");
+  }
+  if (buffer.byteLength > MAX_MODEL_BYTES) {
+    throw new Error("模型文件不能超过 25MB");
+  }
+  return buffer;
+}
+
 if (HOST) {
   app.listen(PORT, HOST, () => {
     console.log(`Digital girlfriend API running on ${HOST}:${PORT}`);
@@ -710,5 +516,13 @@ if (HOST) {
 } else {
   app.listen(PORT, () => {
     console.log(`Digital girlfriend API running on :${PORT}`);
+  });
+}
+
+// Telegram 机器人：配置了 TELEGRAM_BOT_TOKEN 才启动，否则不影响网页端
+const tgToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+if (tgToken) {
+  startTelegramBot(tgToken).catch((err) => {
+    console.error("Telegram bot failed to start:", err);
   });
 }

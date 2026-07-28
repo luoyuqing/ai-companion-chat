@@ -12,6 +12,13 @@
 #   OPENAI_BASE_URL      LLM 基地址 (默认 https://3585616.xyz/v1)
 #   OPENAI_MODEL         LLM 模型 (默认 ds)
 #   MIMO_BASE_URL / MIMO_TTS_MODEL / MIMO_ASR_MODEL / TTS_PROVIDER / ASR_PROVIDER
+#
+# Telegram 机器人 (可选):
+#   TELEGRAM_BOT_TOKEN   通过 @BotFather 申请的 Bot Token；不填则不启动 bot
+#   TELEGRAM_WEBHOOK     可选，填则设为 webhook 模式 (默认 polling)
+#
+# 注意: Telegram 在中国大陆被墙，bot 进程必须跑在能直连 Telegram 的服务器
+#       (如服务器二 韩国首尔 43.155.205.110)，否则 polling 会持续超时。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +44,8 @@ MIMO_ASR_MODEL="${MIMO_ASR_MODEL:-mimo-v2.5-asr}"
 TTS_PROVIDER="${TTS_PROVIDER:-mimo}"
 ASR_PROVIDER="${ASR_PROVIDER:-mimo}"
 DG_UNRESTRICTED_CHAT="${DG_UNRESTRICTED_CHAT:-true}"
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_WEBHOOK="${TELEGRAM_WEBHOOK:-}"
 PORT="${PORT:-8787}"
 HOST_BIND="${HOST_BIND:-127.0.0.1}"
 
@@ -45,9 +54,9 @@ if [ -z "$MIMO_API_KEY" ] || [ -z "$OPENAI_API_KEY" ]; then
   exit 1
 fi
 
-echo "==> [1/7] 安装系统依赖 (nginx / openssl / curl)"
+echo "==> [1/7] 安装系统依赖 (nginx / openssl / curl / ffmpeg)"
 sudo apt-get update -y
-sudo apt-get install -y nginx openssl curl
+sudo apt-get install -y nginx openssl curl ffmpeg
 
 echo "==> [2/7] 安装后端依赖"
 cd "$SERVER_DIR"
@@ -92,6 +101,8 @@ MIMO_ASR_MODEL=${MIMO_ASR_MODEL}
 TTS_PROVIDER=${TTS_PROVIDER}
 ASR_PROVIDER=${ASR_PROVIDER}
 DG_UNRESTRICTED_CHAT=${DG_UNRESTRICTED_CHAT}
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+TELEGRAM_WEBHOOK=${TELEGRAM_WEBHOOK}
 PORT=${PORT}
 HOST=${HOST_BIND}
 EOF
