@@ -53,8 +53,24 @@ echo "==> [2/7] 安装后端依赖"
 cd "$SERVER_DIR"
 npm install
 
-echo "==> [3/7] 解析运行路径"
-NODE_BIN="$(command -v node)"
+echo "==> [3/7] 解析运行路径 (兼容 nvm / 系统安装)"
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ] && [ -s "$HOME/.nvm/nvm.sh" ]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck disable=SC1090
+  . "$NVM_DIR/nvm.sh"
+  NODE_BIN="$(command -v node || true)"
+fi
+if [ -z "$NODE_BIN" ]; then
+  for p in /usr/bin/node /usr/local/bin/node /opt/node/bin/node; do
+    if [ -x "$p" ]; then NODE_BIN="$p"; break; fi
+  done
+fi
+if [ -z "$NODE_BIN" ]; then
+  echo "错误: 找不到 node，请先安装 Node 20+" >&2
+  exit 1
+fi
+echo "使用 node: $NODE_BIN"
 TSX_BIN="$SERVER_DIR/node_modules/.bin/tsx"
 if [ ! -x "$TSX_BIN" ]; then
   echo "错误: 未找到 tsx，npm install 可能失败" >&2
