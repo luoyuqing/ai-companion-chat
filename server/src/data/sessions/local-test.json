@@ -1,0 +1,25 @@
+{
+  "sessionId": "local-test",
+  "createdAt": "2026-06-05T03:53:44.607Z",
+  "updatedAt": "2026-06-05T03:53:44.607Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "你好呀，今天有点想你"
+    },
+    {
+      "role": "assistant",
+      "content": "嗯，我在听，现在我们先把这个话题聊透，你刚才说“你好呀，今天有点想你”，想了想，你的话让我也有点开心呢。 想说什么我都在。"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "warm",
+    "summary": "关系状态：已识别到偏好主题 想你。",
+    "userSignals": [
+      "想你"
+    ],
+    "lastEmotion": "love",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T03:53:44.607Z"
+  }
+}

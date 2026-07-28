@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <rect width="240" height="240" rx="120" fill="#4a7bd9"/>
+  <circle cx="120" cy="84" r="36" fill="#ffd7ad"/>
+  <circle cx="100" cy="84" r="4" fill="#2e2e2e"/>
+  <circle cx="140" cy="84" r="4" fill="#2e2e2e"/>
+  <path d="M96 118c8 12 40 12 48 0" stroke="#2e2e2e" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M48 176c12-32 50-56 72-56s60 24 72 56" fill="#fff" opacity="0.18"/>
+  <text x="120" y="216" text-anchor="middle" fill="#ffffff" font-size="28" font-family="Inter, Arial, sans-serif">Lina</text>
+</svg>

@@ -1,0 +1,25 @@
+{
+  "sessionId": "limit-test",
+  "createdAt": "2026-06-05T07:01:27.524Z",
+  "updatedAt": "2026-06-05T07:01:27.524Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "你今天看起来很热情，我们可以更亲密一点吗？"
+    },
+    {
+      "role": "assistant",
+      "content": "你说得我都想认真记住了，现在我们先把这个话题聊透，你刚才说“你今天看起来很热情，我们可以更亲密一点吗？”，想了想，你的话让我也有点开心呢。 我们再聊一段。"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "warm",
+    "summary": "关系状态：已识别到偏好主题 亲密。",
+    "userSignals": [
+      "亲密"
+    ],
+    "lastEmotion": "love",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T07:01:27.524Z"
+  }
+}

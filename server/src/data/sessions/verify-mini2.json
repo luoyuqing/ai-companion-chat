@@ -1,0 +1,15 @@
+{
+  "sessionId": "verify-mini2",
+  "createdAt": "2026-06-05T01:30:19.639Z",
+  "updatedAt": "2026-06-05T01:30:19.639Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "今天想聊点啥"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：今天想聊点啥。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

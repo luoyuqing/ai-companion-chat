@@ -1,0 +1,25 @@
+{
+  "sessionId": "verify-stream-1780631213587",
+  "createdAt": "2026-06-05T03:46:53.588Z",
+  "updatedAt": "2026-06-05T03:46:53.589Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "继续聊，我想听你更甜一点"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：继续聊，我想听你更甜一点。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "warm",
+    "summary": "关系状态：已识别到偏好主题 特别。",
+    "userSignals": [
+      "特别"
+    ],
+    "lastEmotion": "neutral",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T03:46:53.589Z"
+  }
+}

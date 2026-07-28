@@ -1,0 +1,23 @@
+{
+  "sessionId": "verify-stream-1780644568823",
+  "createdAt": "2026-06-05T07:29:28.824Z",
+  "updatedAt": "2026-06-05T07:29:28.825Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "继续聊，我想听你更甜一点"
+    },
+    {
+      "role": "assistant",
+      "content": "嗯，我在听，现在我们先把这个话题聊透，你刚才说“继续聊，我想听你更甜一点”，我们慢慢聊吧。 继续说吧，我很认真地听着。"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "new",
+    "summary": "关系状态平稳，可继续基于当前角色风格自然互动。",
+    "userSignals": [],
+    "lastEmotion": "neutral",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T07:29:28.825Z"
+  }
+}

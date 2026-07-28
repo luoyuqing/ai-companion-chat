@@ -1,0 +1,15 @@
+{
+  "sessionId": "verify",
+  "createdAt": "2026-06-05T02:01:17.232Z",
+  "updatedAt": "2026-06-05T02:01:17.232Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "Hi"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：Hi。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

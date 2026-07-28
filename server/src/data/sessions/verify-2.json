@@ -1,0 +1,15 @@
+{
+  "sessionId": "verify-2",
+  "createdAt": "2026-06-05T01:35:12.614Z",
+  "updatedAt": "2026-06-05T01:35:12.615Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "今天你累不累"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：今天你累不累。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

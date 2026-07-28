@@ -1,0 +1,9 @@
+{
+  "name": "@dg/wechat-mini",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"Use WeChat DevTools to run: Import wechat-mini as Mini Program source directory\"",
+    "build": "echo \"No build step for static WeChat source in this repo\""
+  }
+}

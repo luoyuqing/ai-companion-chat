@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <rect width="240" height="240" rx="120" fill="#6b3fa0"/>
+  <circle cx="120" cy="120" r="42" fill="#ffd7ef"/>
+  <circle cx="96" cy="104" r="6" fill="#2e2e2e"/>
+  <circle cx="142" cy="104" r="6" fill="#2e2e2e"/>
+  <path d="M100 132h40" stroke="#2e2e2e" stroke-width="4" stroke-linecap="round"/>
+  <path d="M56 188c14-30 52-54 64-54s50 24 64 54" fill="#fff" opacity="0.14"/>
+  <text x="120" y="218" text-anchor="middle" fill="#ffffff" font-size="28" font-family="Inter, Arial, sans-serif">Moon</text>
+</svg>

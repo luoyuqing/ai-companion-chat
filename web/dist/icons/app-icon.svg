@@ -1,0 +1,32 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">数字女友</title>
+  <desc id="desc">数字女友应用图标</desc>
+  <defs>
+    <linearGradient id="bg" x1="8%" y1="0%" x2="92%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="208" r="58" fill="#f8fafc"/>
+  <path
+    d="M174 344h164a64 64 0 0 1 64 64H110a64 64 0 0 1 64-64Z"
+    fill="#f8fafc"
+    opacity="0.92"
+  />
+  <path
+    d="M248 170c-18 0-33-14-33-33s15-33 33-33c17 0 33 14 33 33s-16 33-33 33Zm90-2 26-24-7-26-27 10-12-22-26 2 0 26-28-3-7 28 24 17-4 12c-12 40 4 84 36 106-18 5-36 14-45 31h-80c-9-17-27-26-45-31 32-22 48-66 36-106l-4-12 24-17-7-28-28 3 0-26-26-2-11 22-28-10-7 26 26 24 36 6c-12 39-2 89 40 104 0 8 0 17 0 24H168c0-7 0-16 0-24 42-15 52-65 40-104 20 6 40 5 60 0-12 39-2 89 40 104 0 8 0 17 0 24h-17c0-4 0-16 0-24 42-15 52-65 40-104l33-6Zm-82-72c-17 0-31 14-31 31s14 31 31 31 31-14 31-31-14-31-31-31Z"
+    fill="#f8fafc"
+  />
+  <path
+    d="M256 228c-23 0-43-9-58-23 14 28 42 46 58 46s44-18 58-46c-15 14-35 23-58 23Z"
+    fill="#0b1221"
+    opacity="0.22"
+  />
+  <path
+    d="M206 328h100"
+    stroke="#e2e8f0"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+</svg>

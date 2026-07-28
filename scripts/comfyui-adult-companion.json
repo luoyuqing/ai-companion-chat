@@ -1,0 +1,86 @@
+{
+  "1": {
+    "inputs": {
+      "ckpt_name": "juggernautXL.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple"
+  },
+  "2": {
+    "inputs": {
+      "width": 832,
+      "height": 1088,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage"
+  },
+  "3": {
+    "inputs": {
+      "text": "RAW editorial fashion photo, original fictional adult woman, visibly 28 years old, mixed East Asian and Mediterranean heritage, exceptionally beautiful mature face, hazel eyes, long dark wavy hair, warm olive skin, voluptuous curvy hourglass body, full natural bust, narrow waist, elegant fitted burgundy satin cocktail dress with a tasteful deep neckline, fully clothed, seated on a velvet sofa in a refined apartment at dusk, relaxed intimate posture, direct eye contact, subtle seductive smile, mature confident sensuality, warm window light and amber practical lights, natural skin texture, realistic proportions, 85mm lens, shallow depth of field, premium magazine photography, photorealistic, high detail",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "4": {
+    "inputs": {
+      "text": "minor, child, teen, young-looking, school uniform, celebrity, real person, nude, naked, nipples, genitalia, explicit sex, porn, lingerie, bikini, see-through clothing, fetish outfit, exaggerated anatomy, implants, cartoon, anime, 3d render, doll, plastic skin, crossed eyes, asymmetric eyes, deformed face, bad anatomy, bad hands, extra fingers, missing fingers, extra limbs, fused fingers, distorted body, cropped head, blurry, low resolution, watermark, text, logo",
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode"
+  },
+  "5": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "steps": 30,
+      "cfg": 5.5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1,
+      "positive": [
+        "3",
+        0
+      ],
+      "negative": [
+        "4",
+        0
+      ],
+      "latent_image": [
+        "2",
+        0
+      ],
+      "seed": 2742819
+    },
+    "class_type": "KSampler"
+  },
+  "6": {
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "7": {
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "filename_prefix": "digital_girlfriend_lina_adult_original"
+    },
+    "class_type": "SaveImage"
+  }
+}

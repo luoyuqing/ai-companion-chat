@@ -1,0 +1,44 @@
+{
+  "name": "digital-girlfriend-platform",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present --parallel",
+    "dev:all": "node ./scripts/dev-all.mjs",
+    "start:all": "node ./scripts/dev-all.mjs",
+    "build:web": "npm run build --workspace @dg/web",
+    "prepare:ios": "npm run build --workspace @dg/web && npm run prepare:ios --workspace @dg/mobile",
+    "build:ios": "npm run build:for-ios",
+    "sync:ios": "npm run sync:ios --workspace @dg/mobile",
+    "doctor:ios": "npm run doctor:ios --workspace @dg/mobile",
+    "rebuild:ios": "npm run rebuild:ios --workspace @dg/mobile",
+    "open:ios": "npm run open:ios --workspace @dg/mobile",
+    "init:ios": "npm run init:ios --workspace @dg/mobile",
+    "build": "npm run build --workspaces --if-present",
+    "build:for-ios": "npm run build --workspace @dg/web && npm run build:ios --workspace @dg/mobile",
+    "setup:platform-config": "node ./scripts/configure-platform-config.mjs",
+    "setup:release": "node ./scripts/setup-release.mjs",
+    "release:all": "node ./scripts/release-all.mjs",
+    "release:all:ios": "node ./scripts/release-all.mjs --build-ios",
+    "setup:release:local": "DG_ALLOW_PLACEHOLDER_IDS=true npm run setup:release",
+    "verify:ready": "npm run verify:install-readiness && npm run verify:release",
+    "verify:ready:local": "DG_ALLOW_PLACEHOLDER_IDS=true npm run verify:ready",
+    "verify:release:local": "DG_ALLOW_PLACEHOLDER_IDS=true npm run verify:release",
+    "check:release": "node ./scripts/check-release-config.mjs",
+    "verify:install-readiness": "node ./scripts/verify-install-readiness.mjs",
+    "verify:release": "npm run check:release && if [ -n \"$API_BASE\" ]; then npm run verify:all; else echo \"⚠️  未设置 API_BASE，跳过服务端 API 验收（如本地测试建议先启动后端并设置 API_BASE）。\"; fi",
+    "verify:digital-human-loop": "node ./scripts/verify-digital-human-loop.mjs",
+    "lint": "npm run lint --workspaces --if-present",
+    "verify:all": "node ./scripts/verify-stack.mjs",
+    "start": "npm run start --workspace @dg/server"
+  },
+  "workspaces": [
+    "server",
+    "web",
+    "wechat-mini",
+    "mobile"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "sessionId": "goal-verify-18901",
+  "createdAt": "2026-06-05T07:02:06.563Z",
+  "updatedAt": "2026-06-05T07:02:06.563Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "今天很想你"
+    },
+    {
+      "role": "assistant",
+      "content": "好呀，来吧，现在我们先把这个话题聊透，你刚才说“今天很想你”，想了想，你的话让我也有点开心呢。 继续说吧，我很认真地听着。"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "warm",
+    "summary": "关系状态：已识别到偏好主题 想你。",
+    "userSignals": [
+      "想你"
+    ],
+    "lastEmotion": "love",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T07:02:06.563Z"
+  }
+}

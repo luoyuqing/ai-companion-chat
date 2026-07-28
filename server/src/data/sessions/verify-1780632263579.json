@@ -1,0 +1,23 @@
+{
+  "sessionId": "verify-1780632263579",
+  "createdAt": "2026-06-05T04:04:23.586Z",
+  "updatedAt": "2026-06-05T04:04:23.587Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "先聊几句，测试下"
+    },
+    {
+      "role": "assistant",
+      "content": "你说得我都想认真记住了，现在我们先把这个话题聊透，你刚才说“先聊几句，测试下”，我们慢慢聊吧。 继续说吧，我很认真地听着。"
+    }
+  ],
+  "context": {
+    "relationshipAffinity": "new",
+    "summary": "关系状态平稳，可继续基于当前角色风格自然互动。",
+    "userSignals": [],
+    "lastEmotion": "neutral",
+    "turnCount": 1,
+    "updatedAt": "2026-06-05T04:04:23.586Z"
+  }
+}

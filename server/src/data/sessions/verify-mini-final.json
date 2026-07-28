@@ -1,0 +1,15 @@
+{
+  "sessionId": "verify-mini-final",
+  "createdAt": "2026-06-05T01:30:49.484Z",
+  "updatedAt": "2026-06-05T01:30:49.485Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "给你一个甜甜的问候"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：给你一个甜甜的问候。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

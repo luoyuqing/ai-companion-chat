@@ -1,0 +1,23 @@
+{
+  "sessionId": "verify-mini",
+  "createdAt": "2026-06-05T01:15:22.647Z",
+  "updatedAt": "2026-06-05T01:15:24.941Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "今天天气不错，我们聊聊吧"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：今天天气不错，我们聊聊吧。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    },
+    {
+      "role": "user",
+      "content": "先做个笑脸"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：先做个笑脸。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

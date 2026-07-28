@@ -1,0 +1,15 @@
+{
+  "sessionId": "s-mq09tr3k-52ac78e0",
+  "createdAt": "2026-06-05T01:54:15.537Z",
+  "updatedAt": "2026-06-05T01:54:15.539Z",
+  "history": [
+    {
+      "role": "user",
+      "content": "测试"
+    },
+    {
+      "role": "assistant",
+      "content": "我收到了：测试。刚刚你说得很特别，我很想继续和你聊下去，先来个笑容给你看~"
+    }
+  ]
+}

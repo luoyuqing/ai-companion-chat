@@ -1,0 +1,14 @@
+{
+  "pages": ["pages/index/index"],
+  "window": {
+    "navigationBarTitleText": "数字女友",
+    "navigationBarBackgroundColor": "#0f1322",
+    "navigationBarTextStyle": "white"
+  },
+  "permission": {
+    "scope.record": {
+      "desc": "用于语音输入，唤起你的小程序数字人对话"
+    }
+  },
+  "style": "v2"
+}
