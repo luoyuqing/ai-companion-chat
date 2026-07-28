@@ -485,3 +485,64 @@ function inferEmotionFromModel(text: string): Emotion {
   }
   return "neutral";
 }
+
+/**
+ * 把一段对话压缩为长期记忆档案，用于总结模式下替代逐轮全量历史。
+ * 合并已有档案与新增对话片段，输出简洁、客观、条目式的记忆文本。
+ * 失败或无模型时退化为保留已有档案（或截断原文），保证不丢记忆。
+ */
+export async function summarizeConversation(
+  character: DigitalHumanConfig,
+  history: ChatMessage[],
+  existingMemory?: string
+): Promise<string> {
+  const turns = history
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .slice(-40)
+    .map((m) => `${m.role === "user" ? "用户" : character.name}：${m.content}`)
+    .join("\n");
+
+  if (!turns.trim()) {
+    return existingMemory || "";
+  }
+
+  const systemPrompt = [
+    "你是长期记忆整理助手。下面是一段陪伴型数字人与用户的对话，以及已有的长期记忆档案。",
+    "请将其提炼、合并为一份简洁、客观、条目式的「记忆档案」，用于在上下文较短的模型上替代逐轮全量历史。",
+    "要求：",
+    "1. 保留用户的关键个人信息（姓名、年龄、职业、所在地等）与明确偏好、忌讳；",
+    "2. 保留已发生的重要事件、约定、未完成事项；",
+    "3. 保留当前话题、关系进展阶段与用户近期情绪状态；",
+    "4. 丢弃寒暄与重复内容，不要逐字记录对话；",
+    "5. 用中文分条列出，总字数控制在 250 字以内；",
+    "6. 不要出现剧本口吻（如「用户说……」），直接记录事实与状态。",
+    "只输出新的记忆档案全文，不要解释。"
+  ].join("\n");
+
+  const userPrompt =
+    `【已有记忆档案】\n${existingMemory?.trim() || "（无）"}\n\n` +
+    `【待整理对话】\n${turns}\n\n请输出更新后的记忆档案：`;
+
+  const client = getOpenAiClient();
+  if (!client) {
+    // 无可用模型：退化为保留已有档案，否则截断原文兜底
+    return existingMemory?.trim() || turns.slice(-1500);
+  }
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+      temperature: 0.3,
+      stream: false,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
+    });
+    const text = completion.choices?.[0]?.message?.content?.trim();
+    return text || existingMemory || "";
+  } catch (err) {
+    console.error("summarize conversation failed:", err);
+    return existingMemory || "";
+  }
+}

@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import dns from "node:dns";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor } from "grammy";
 
-import { runChat } from "../core/chat";
+import { runChat, generateMemoryForSession } from "../core/chat";
 import {
   applyCharacterPatch,
   AVATAR_DIR,
@@ -18,12 +20,25 @@ import {
   sanitizeAvatarFileName,
   writeCustomHumans
 } from "../core/data";
+import {
+  COMPANION_INTERACTIONS,
+  COMPANION_SCENES,
+  getInteractionById,
+  getSceneById,
+  isCompanionSceneId,
+  isResponseStyleId,
+  RESPONSE_STYLES
+} from "../core/scenes";
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
-import { clearSession } from "../services/session";
-import { DigitalHumanConfig } from "../types";
+import { clearSession, importSession, loadSession, updateSessionMeta } from "../services/session";
+import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
 
 const execFileAsync = promisify(execFile);
+
+// 强制 Node 优先 IPv4 解析：境外服务器常无可用 IPv6 路由，undici fetch 先试 IPv6 会 ETIMEDOUT
+// （Telegram 文件下载 api.telegram.org/file/... 因此超时）。改为 ipv4first 后走通。
+dns.setDefaultResultOrder("ipv4first");
 
 // 模块级保存 bot token，供下载 Telegram 文件时拼接 file URL 使用
 let BOT_TOKEN = "";
@@ -44,23 +59,114 @@ interface CreateDraft {
 interface BotSessionData {
   currentCharacterId?: string;
   voiceEnabled: boolean;
+  activeSceneId?: "daily" | "date" | "comfort" | "flirty" | "bedtime";
+  responseStyle?: "warm" | "soft" | "mature";
+  adultVerified?: boolean;
+  pendingAdultScene?: "daily" | "date" | "comfort" | "flirty" | "bedtime";
+  pendingAdultInteraction?: "hug" | "hand" | "whisper" | "comfort" | "goodnight";
   create?: CreateDraft;
   createStep?: "name" | "description" | "avatar" | "voice" | "relationshipMode" | "confirm";
   editId?: string;
   editField?: "name" | "description" | "avatarUrl" | "voice" | "relationshipMode";
+  pendingImport?: boolean;
 }
 
 type BotContext = Context & SessionFlavor<BotSessionData>;
 
 // ---------- helpers ----------
+// 会话 ID 方案：网页端与主人共用 mem:<characterId>（按数字人隔离的长期记忆），
+// 其他授权 TG 用户各自独立存储 tg:<chatId>:<characterId>，不污染主人记忆。
 function chatSessionId(ctx: BotContext): string {
+  const charId = ctx.session.currentCharacterId || "default";
+  const ownerId = loadOwner();
+  if (ownerId != null && ctx.from?.id === ownerId) {
+    return `mem:${charId}`;
+  }
   const chatId = ctx.chat?.id ?? ctx.from?.id ?? 0;
-  return `tg-${chatId}`;
+  return `tg-${chatId}-${charId}`;
 }
 
 async function currentCharacter(ctx: BotContext): Promise<DigitalHumanConfig | null> {
   const characters = await getCharacters();
   return resolveCharacter(characters, ctx.session.currentCharacterId);
+}
+
+// 在异步耗时操作期间持续发送「正在输入…」指示，让用户知道数字人正在准备回复
+async function withTyping<T>(ctx: BotContext, fn: () => Promise<T>): Promise<T> {
+  const chatId = ctx.chat?.id;
+  if (chatId == null) return fn();
+  const send = () => ctx.api.sendChatAction(chatId, "typing").catch(() => {});
+  await send();
+  const timer = setInterval(send, 4000);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function runChatWithContext(
+  ctx: BotContext,
+  message: string,
+  sceneOverride?: "daily" | "date" | "comfort" | "flirty" | "bedtime"
+): Promise<ReturnType<typeof runChat>> {
+  const character = await currentCharacter(ctx);
+  if (!character) {
+    throw new Error("NO_CHARACTER");
+  }
+  return withTyping(ctx, () =>
+    runChat({
+      sessionId: chatSessionId(ctx),
+      message,
+      characterId: character.id,
+      relationshipMode: sceneOverride
+        ? (getSceneById(sceneOverride)?.relationshipMode ?? character.relationshipMode)
+        : undefined,
+      sceneId: sceneOverride || ctx.session.activeSceneId,
+      styleId: ctx.session.responseStyle,
+      adultVerified: ctx.session.adultVerified
+    })
+  );
+}
+
+function sceneLabel(id?: string): string {
+  if (!id) return "未选择（默认日常陪伴）";
+  return getSceneById(id as "daily" | "date" | "comfort" | "flirty" | "bedtime")?.label ?? id;
+}
+
+function styleLabel(id?: string): string {
+  if (!id) return "默认温柔";
+  return RESPONSE_STYLES.find((s) => s.id === id)?.label ?? id;
+}
+
+// ---------- 访问控制（仅允许主人 TG 账号）----------
+const OWNER_FILE = path.resolve(AVATAR_DIR, "..", "owner.json");
+
+function getAllowedIds(): number[] {
+  const raw = process.env.ALLOWED_TG_USER_ID?.trim();
+  if (!raw) return [];
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => Number(s))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+function loadOwner(): number | null {
+  try {
+    if (!existsSync(OWNER_FILE)) return null;
+    const id = Number(JSON.parse(readFileSync(OWNER_FILE, "utf8")).id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveOwner(id: number): void {
+  try {
+    writeFileSync(OWNER_FILE, JSON.stringify({ id, registeredAt: new Date().toISOString() }), "utf8");
+  } catch (e) {
+    console.error("保存 bot owner 失败：", e);
+  }
 }
 
 async function listHumansKeyboard(ctx: BotContext): Promise<{ text: string; keyboard: InlineKeyboard }> {
@@ -79,12 +185,22 @@ async function downloadToTemp(ctx: BotContext, fileId: string, ext: string): Pro
   const filePath = file.file_path;
   if (!filePath) throw new Error("文件无可用路径");
   const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("下载 Telegram 文件失败");
-  const buffer = Buffer.from(await res.arrayBuffer());
   const tmp = path.join(os.tmpdir(), `dg-tg-${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`);
-  await fs.writeFile(tmp, buffer);
-  return tmp;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      // 用 curl -4 下载：Telegram anycast 存在部分不可达 IPv4，curl 的 happy-eyeballs + 强制 IPv4 比 undici fetch 稳定
+      await execFileAsync("curl", ["-4", "-sS", "-f", "--max-time", "20", "-o", tmp, url]);
+      const st = await fs.stat(tmp);
+      if (!st.size) throw new Error("下载文件为空");
+      return tmp;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`下载 TG 文件第 ${attempt} 次失败，重试…`, e instanceof Error ? e.message : e);
+      await new Promise((r) => setTimeout(r, 800 * attempt));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("下载 Telegram 文件失败");
 }
 
 async function saveAvatar(ctx: BotContext, fileId: string): Promise<string> {
@@ -160,6 +276,34 @@ function relationshipKeyboard(prefix: string): InlineKeyboard {
   return kb;
 }
 
+function sceneKeyboard(selectedId?: string): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  COMPANION_SCENES.forEach((scene) => {
+    const mark = scene.id === selectedId ? "✅ " : "";
+    kb.text(`${mark}${scene.label}`, `scene:${scene.id}`).row();
+  });
+  return kb;
+}
+
+function interactionKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  COMPANION_INTERACTIONS.forEach((interaction, i) => {
+    kb.text(interaction.label, `action:${interaction.id}`);
+    if (i % 2 === 1) kb.row();
+  });
+  if (COMPANION_INTERACTIONS.length % 2 === 1) kb.row();
+  return kb;
+}
+
+function styleKeyboard(selectedId?: string): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  RESPONSE_STYLES.forEach((style) => {
+    const mark = style.id === selectedId ? "✅ " : "";
+    kb.text(`${mark}${style.label}`, `style:${style.id}`).row();
+  });
+  return kb;
+}
+
 // ---------- bot ----------
 export function registerBot(bot: Bot<BotContext>): void {
   bot.catch((err) => {
@@ -168,21 +312,52 @@ export function registerBot(bot: Bot<BotContext>): void {
 
   bot.use(session({ initial: (): BotSessionData => ({ voiceEnabled: false }) }));
 
+  // 访问控制：仅允许主人 TG 账号。ALLOWED_TG_USER_ID 显式指定时以此为准；
+  // 否则进入引导期，首位发送 /start 的用户自动注册为 owner，之后其余账号被拒。
+  bot.use(async (ctx, next) => {
+    const id = ctx.from?.id;
+    const allowed = getAllowedIds();
+    if (allowed.length > 0) {
+      if (id != null && allowed.includes(id)) return next();
+      return ctx.reply("⛔ 未授权：本机器人仅限指定账号使用。").catch(() => {});
+    }
+    const owner = loadOwner();
+    if (owner == null) return next(); // 引导期：首个 /start 将注册为 owner
+    if (id != null && id === owner) return next();
+    return ctx.reply("⛔ 未授权：本机器人仅限主人使用。").catch(() => {});
+  });
+
   bot.command("start", async (ctx) => {
+    const allowed = getAllowedIds();
+    if (allowed.length === 0 && loadOwner() == null && ctx.from?.id != null) {
+      saveOwner(ctx.from.id);
+      console.log(`Telegram bot owner 已注册: ${ctx.from.id}`);
+    }
     const character = await currentCharacter(ctx);
     const name = character?.name ?? "（未选择，发送 /list 选择）";
+    const session = await loadSession(chatSessionId(ctx));
+    const summaryOn = session?.summaryMode ?? false;
     await ctx.reply(
       `👋 你好，我是数字人私聊助手。\n\n` +
         `当前数字人：${name}\n` +
-        `语音回复：${ctx.session.voiceEnabled ? "开 🔊" : "关 🔇"}\n\n` +
+        `陪伴场景：${sceneLabel(ctx.session.activeSceneId)}\n` +
+        `回复语气：${styleLabel(ctx.session.responseStyle)}\n` +
+        `语音回复：${ctx.session.voiceEnabled ? "开 🔊" : "关 🔇"}\n` +
+        `记忆总结：${summaryOn ? "开（只发记忆+最近对话）" : "关（发完整历史）"}\n\n` +
         `常用命令：\n` +
         `/list 查看数字人\n` +
         `/select 切换数字人\n` +
+        `/scene 选择陪伴场景\n` +
+        `/action 快速互动（抱抱/晚安等）\n` +
+        `/style 选择回复语气\n` +
         `/voice 开关语音回复\n` +
+        `/summary 开关记忆总结模式\n` +
         `/new 创建数字人\n` +
         `/edit 编辑数字人\n` +
         `/delete 删除数字人\n` +
         `/reset 清空当前对话\n` +
+        `/export 导出记忆备份（JSON 文件）\n` +
+        `/import 从备份文件恢复记忆\n` +
         `/help 查看全部命令`
     );
   });
@@ -193,11 +368,17 @@ export function registerBot(bot: Bot<BotContext>): void {
         `/start 欢迎与状态\n` +
         `/list 列出数字人\n` +
         `/select <序号或ID> 切换当前数字人\n` +
+        `/scene 选择陪伴场景（日常/约会/安慰/亲密/睡前）\n` +
+        `/action 快速互动（抱抱/牵手/耳语/依靠/晚安）\n` +
+        `/style 选择回复语气（温柔/轻声/沉稳）\n` +
         `/voice 开关语音回复\n` +
         `/new 对话式创建数字人\n` +
         `/edit 对话式编辑（先选人）\n` +
         `/delete <序号> 删除数字人\n` +
         `/reset 清空与当前数字人的对话\n` +
+        `/summary 开关记忆总结模式（短上下文模型防超限）\n` +
+        `/export 导出当前数字人的记忆备份（JSON 文件）\n` +
+        `/import 从备份文件恢复记忆（会覆盖现有记忆）\n` +
         `/cancel 取消正在进行的创建/编辑\n\n` +
         `直接发文字即可聊天；发语音消息会自动转写并回复（语音开启时朗读）。`
     );
@@ -229,9 +410,97 @@ export function registerBot(bot: Bot<BotContext>): void {
     await ctx.reply(`语音回复已${ctx.session.voiceEnabled ? "开启 🔊" : "关闭 🔇"}`);
   });
 
+  bot.command("scene", async (ctx) => {
+    await ctx.reply("选择当前陪伴场景：", {
+      reply_markup: sceneKeyboard(ctx.session.activeSceneId)
+    });
+  });
+
+  bot.command("action", async (ctx) => {
+    await ctx.reply("选一个互动：", { reply_markup: interactionKeyboard() });
+  });
+
+  bot.command("style", async (ctx) => {
+    await ctx.reply("选择回复语气风格：", {
+      reply_markup: styleKeyboard(ctx.session.responseStyle)
+    });
+  });
+
   bot.command("reset", async (ctx) => {
     await clearSession(chatSessionId(ctx));
     await ctx.reply("已清空与当前数字人的对话记忆。");
+  });
+
+  // 记忆总结模式：开启后每轮只把「记忆档案 + 最近若干条」发给模型，避免短上下文模型超限
+  bot.command("summary", async (ctx) => {
+    const character = await currentCharacter(ctx);
+    if (!character) {
+      return ctx.reply("请先用 /list 选择一个数字人。");
+    }
+    const sessionId = chatSessionId(ctx);
+    const session = await loadSession(sessionId);
+    const current = session?.summaryMode ?? false;
+    const arg = ctx.match?.trim().toLowerCase();
+    let next = current;
+    if (arg === "on" || arg === "1" || arg === "开" || arg === "开启") {
+      next = true;
+    } else if (arg === "off" || arg === "0" || arg === "关" || arg === "关闭") {
+      next = false;
+    } else {
+      next = !current; // 不带参数则切换
+    }
+
+    await updateSessionMeta(sessionId, { summaryMode: next });
+
+    if (next) {
+      const memory = await generateMemoryForSession(sessionId, character);
+      const snippet = memory.trim()
+        ? `${memory.trim().slice(0, 240)}${memory.trim().length > 240 ? "…" : ""}`
+        : "（当前还没有对话，记得从下一次聊天开始积累）";
+      await ctx.reply(
+        "✅ 已开启记忆总结模式。\n每轮对话只向模型发送「记忆档案 + 最近若干条」，避免上下文超限导致遗忘。\n\n" +
+          `📄 当前记忆档案：\n${snippet}`
+      );
+    } else {
+      await ctx.reply("已关闭记忆总结模式，后续将发送完整历史（短上下文模型可能超限）。");
+    }
+  });
+
+  // 导出当前数字人的服务器记忆为 JSON 文件（跨设备/跨服务器迁移用）
+  bot.command("export", async (ctx) => {
+    const character = await currentCharacter(ctx);
+    if (!character) {
+      return ctx.reply("请先用 /list 选择一个数字人。");
+    }
+    const record = await loadSession(chatSessionId(ctx));
+    if (!record || record.history.length === 0) {
+      return ctx.reply("当前数字人还没有对话记忆可导出。");
+    }
+    const tmp = path.join(os.tmpdir(), `dg-memory-${character.id}-${Date.now()}.json`);
+    await fs.writeFile(tmp, JSON.stringify(record, null, 2), "utf8");
+    try {
+      await ctx.api.sendDocument(ctx.chat!.id, new InputFile(tmp, `dg-memory-${character.id}.json`));
+      await ctx.reply("已导出当前数字人的记忆备份（JSON 文件）。");
+    } catch (err) {
+      console.error("export memory failed:", err);
+      await ctx.reply("导出失败，请稍后重试。");
+    } finally {
+      await fs.unlink(tmp).catch(() => {});
+    }
+  });
+
+  // 进入导入模式：下一步发送的记忆 JSON 会写回当前数字人
+  bot.command("import", async (ctx) => {
+    const character = await currentCharacter(ctx);
+    if (!character) {
+      return ctx.reply("请先用 /list 选择一个数字人，导入的记忆会写入该数字人。");
+    }
+    ctx.session.pendingImport = true;
+    await ctx.reply(
+      "请发送一个记忆备份 JSON 文件（网页端『备份记忆』下载的文件），我会把其中的对话恢复到当前数字人「" +
+        character.name +
+        "」。\n注意：会覆盖当前数字人的现有记忆。"
+    );
   });
 
   bot.command("cancel", async (ctx) => {
@@ -239,6 +508,8 @@ export function registerBot(bot: Bot<BotContext>): void {
     ctx.session.createStep = undefined;
     ctx.session.editId = undefined;
     ctx.session.editField = undefined;
+    ctx.session.pendingAdultScene = undefined;
+    ctx.session.pendingAdultInteraction = undefined;
     await ctx.reply("已取消当前操作。");
   });
 
@@ -284,6 +555,122 @@ export function registerBot(bot: Bot<BotContext>): void {
           ctx.session.currentCharacterId = target.id;
           await ctx.editMessageText(`已切换到：${target.name}`);
         }
+        return ctx.answerCallbackQuery();
+      }
+
+      if (data.startsWith("scene:")) {
+        const sceneId = data.slice(6);
+        if (!isCompanionSceneId(sceneId)) {
+          await ctx.editMessageText("未知场景");
+          return ctx.answerCallbackQuery();
+        }
+        if (sceneId === "flirty" && !ctx.session.adultVerified) {
+          ctx.session.pendingAdultScene = sceneId;
+          const kb = new InlineKeyboard()
+            .text("我已成年，确认进入", "adult:confirm")
+            .text("取消", "adult:cancel");
+          await ctx.editMessageText(
+            "「亲密 18+」场景包含成人暧昧表达。请确认你已年满 18 周岁并自愿进入。",
+            { reply_markup: kb }
+          );
+          return ctx.answerCallbackQuery();
+        }
+        ctx.session.activeSceneId = sceneId;
+        const scene = getSceneById(sceneId);
+        await ctx.editMessageText(
+          `已切换到场景：${scene?.label ?? sceneId}\n${scene?.description ?? ""}`
+        );
+        return ctx.answerCallbackQuery();
+      }
+
+      if (data.startsWith("action:")) {
+        const actionId = data.slice(7);
+        const interaction = getInteractionById(actionId);
+        if (!interaction) {
+          await ctx.editMessageText("未知互动");
+          return ctx.answerCallbackQuery();
+        }
+        const scene = getSceneById(interaction.sceneId);
+        if (scene?.id === "flirty" && !ctx.session.adultVerified) {
+          ctx.session.pendingAdultInteraction = interaction.id;
+          const kb = new InlineKeyboard()
+            .text("我已成年，确认进入", "adult:confirm")
+            .text("取消", "adult:cancel");
+          await ctx.editMessageText(
+            "该互动会进入「亲密 18+」场景。请确认你已年满 18 周岁并自愿进入。",
+            { reply_markup: kb }
+          );
+          return ctx.answerCallbackQuery();
+        }
+        await ctx.editMessageText(`${interaction.label} → ${interaction.message}`);
+        try {
+          const result = await runChatWithContext(ctx, interaction.message, interaction.sceneId);
+          await replyWithTextAndVoice(ctx, result.text, result.character);
+        } catch (err) {
+          console.error("action handling failed:", err);
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg === "NO_CHARACTER") {
+            await ctx.reply("请先用 /list 选择一个数字人。");
+          } else {
+            await ctx.reply(`互动处理失败：${msg.slice(0, 120)}`);
+          }
+        }
+        return ctx.answerCallbackQuery();
+      }
+
+      if (data.startsWith("style:")) {
+        const styleId = data.slice(6);
+        const style = RESPONSE_STYLES.find((s) => s.id === styleId);
+        if (!style) {
+          await ctx.editMessageText("未知语气风格");
+          return ctx.answerCallbackQuery();
+        }
+        ctx.session.responseStyle = styleId as "warm" | "soft" | "mature";
+        await ctx.editMessageText(`已设置回复语气：${style.label}\n${style.instruction}`);
+        return ctx.answerCallbackQuery();
+      }
+
+      if (data === "adult:confirm") {
+        ctx.session.adultVerified = true;
+        const pendingScene = ctx.session.pendingAdultScene;
+        const pendingInteraction = ctx.session.pendingAdultInteraction;
+        ctx.session.pendingAdultScene = undefined;
+        ctx.session.pendingAdultInteraction = undefined;
+        if (pendingScene) {
+          ctx.session.activeSceneId = pendingScene;
+          const scene = getSceneById(pendingScene);
+          await ctx.editMessageText(
+            `已确认并切换到场景：${scene?.label ?? pendingScene}\n${scene?.description ?? ""}`
+          );
+        } else if (pendingInteraction) {
+          const interaction = getInteractionById(pendingInteraction);
+          if (interaction) {
+            await ctx.editMessageText(`${interaction.label} → ${interaction.message}`);
+            try {
+              const result = await runChatWithContext(ctx, interaction.message, interaction.sceneId);
+              await replyWithTextAndVoice(ctx, result.text, result.character);
+            } catch (err) {
+              console.error("adult interaction failed:", err);
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg === "NO_CHARACTER") {
+                await ctx.reply("请先用 /list 选择一个数字人。");
+              } else {
+                await ctx.reply(`互动处理失败：${msg.slice(0, 120)}`);
+              }
+            }
+          } else {
+            await ctx.editMessageText("互动已过期，请重新选择。");
+          }
+        } else {
+          await ctx.editMessageText("已确认成人模式。");
+        }
+        return ctx.answerCallbackQuery();
+      }
+
+      if (data === "adult:cancel") {
+        ctx.session.pendingAdultScene = undefined;
+        ctx.session.pendingAdultInteraction = undefined;
+        await ctx.editMessageText("已取消。");
         return ctx.answerCallbackQuery();
       }
 
@@ -467,6 +854,39 @@ export function registerBot(bot: Bot<BotContext>): void {
     }
   });
 
+  // ---------- document (import memory) ----------
+  bot.on("message:document", async (ctx) => {
+    if (!ctx.session.pendingImport) return;
+    ctx.session.pendingImport = false;
+    const doc = ctx.message.document;
+    if (!doc) return;
+    let tmp: string | undefined;
+    try {
+      tmp = await downloadToTemp(ctx, doc.file_id, "json");
+      const raw = await fs.readFile(tmp, "utf8");
+      const parsed = JSON.parse(raw) as { history?: unknown; context?: unknown };
+      if (!Array.isArray(parsed.history)) {
+        return ctx.reply("文件格式不正确：缺少 history 数组。");
+      }
+      const character = await currentCharacter(ctx);
+      if (!character) {
+        return ctx.reply("请先用 /list 选择一个数字人。");
+      }
+      const record = await importSession(
+        chatSessionId(ctx),
+        parsed.history as ChatMessage[],
+        parsed.context as SessionContext | undefined
+      );
+      await ctx.reply(`记忆恢复成功，共 ${record.history.length} 条对话。重新打开对话即可看到历史。`);
+    } catch (err) {
+      console.error("import memory failed:", err);
+      const msg = err instanceof Error ? err.message : "未知错误";
+      await ctx.reply(`恢复失败：${msg.slice(0, 120)}`);
+    } finally {
+      if (tmp) await fs.unlink(tmp).catch(() => {});
+    }
+  });
+
   // ---------- voice messages ----------
   bot.on("message:voice", async (ctx) => {
     const fileId = ctx.message.voice.file_id;
@@ -480,19 +900,20 @@ export function registerBot(bot: Bot<BotContext>): void {
         return ctx.reply("没听清，能再发一次吗？");
       }
       await ctx.reply(`🎙 识别：${text}`);
-      const character = await currentCharacter(ctx);
-      if (!character) {
-        return ctx.reply("请先用 /list 选择一个数字人。");
+      try {
+        const result = await runChatWithContext(ctx, text);
+        await replyWithTextAndVoice(ctx, result.text, result.character);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "NO_CHARACTER") {
+          return ctx.reply("请先用 /list 选择一个数字人。");
+        }
+        throw err;
       }
-      const result = await runChat({
-        sessionId: chatSessionId(ctx),
-        message: text,
-        characterId: character.id
-      });
-      await replyWithTextAndVoice(ctx, result.text, result.character);
     } catch (err) {
       console.error("voice handling failed:", err);
-      await ctx.reply("语音处理失败：需要服务器安装 ffmpeg，或请用文字聊天。");
+      const msg = err instanceof Error ? err.message : String(err);
+      await ctx.reply(`语音处理失败：${msg.slice(0, 120)}`);
     } finally {
       if (oggPath) await fs.unlink(oggPath).catch(() => {});
     }
@@ -548,16 +969,16 @@ export function registerBot(bot: Bot<BotContext>): void {
       }
 
       // 普通聊天
-      const character = await currentCharacter(ctx);
-      if (!character) {
-        return ctx.reply("请先用 /list 选择一个数字人再聊天。");
+      try {
+        const result = await runChatWithContext(ctx, text);
+        await replyWithTextAndVoice(ctx, result.text, result.character);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "NO_CHARACTER") {
+          return ctx.reply("请先用 /list 选择一个数字人再聊天。");
+        }
+        throw err;
       }
-      const result = await runChat({
-        sessionId: chatSessionId(ctx),
-        message: text,
-        characterId: character.id
-      });
-      await replyWithTextAndVoice(ctx, result.text, result.character);
     } catch (err) {
       console.error("text handling failed:", err);
       await ctx.reply("处理失败，请稍后再试。");

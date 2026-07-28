@@ -4,6 +4,7 @@ import {
   Brain,
   Coffee,
   Download,
+  FileText,
   Hand,
   Heart,
   Image as ImageIcon,
@@ -12,6 +13,7 @@ import {
   MicOff,
   Moon,
   Pencil,
+  RotateCcw,
   Save,
   Send,
   Settings2,
@@ -34,7 +36,12 @@ import {
   StreamDoneResponse,
   clearSessionHistory,
   createDigitalHuman,
+  exportSessionHistory,
+  fetchSessionMeta,
+  importSessionHistory,
   isLocalCompanionMode,
+  fetchSessionHistory,
+  setSummaryMode,
   resolveMediaUrl,
   sendMessage,
   sendMessageStream,
@@ -52,7 +59,10 @@ const AVATAR_MODE_STORAGE_KEY = "dg-avatar-render-mode";
 const CHAT_STATE_STORAGE_PREFIX = "dg-chat-state-v1";
 const LOCAL_HUMANS_STORAGE_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_STORAGE_KEY = "dg-local-chat-context-v1";
+// 长期记忆按数字人隔离存储：dg-user-memory-v1:<characterId>
+// 旧版本使用全局键 dg-user-memory-v1（不区分数字人），首次切换时自动迁移到新键
 const USER_MEMORY_STORAGE_KEY = "dg-user-memory-v1";
+const userMemoryKey = (characterId?: string) => `dg-user-memory-v1:${characterId || "default"}`;
 const SESSION_STORAGE_KEY = "dg-session-id";
 const SELECTED_CHARACTER_STORAGE_KEY = "dg-selected-character-id";
 const ACTIVE_SCENE_STORAGE_KEY = "dg-active-companion-scene-v1";
@@ -446,18 +456,31 @@ function normalizeUserMemory(raw: unknown): UserMemory {
   };
 }
 
-function readStoredUserMemory(): UserMemory {
+function readStoredUserMemory(characterId?: string): UserMemory {
   if (typeof window === "undefined") return { ...emptyUserMemory };
-  return normalizeUserMemory(readLocalStorageJson<unknown>(USER_MEMORY_STORAGE_KEY, emptyUserMemory));
+  const key = userMemoryKey(characterId);
+  const raw = readLocalStorageJson<unknown>(key, null);
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return normalizeUserMemory(raw);
+  }
+  // 旧版本兼容：全局键 dg-user-memory-v1 不区分数字人，首次读取时迁移到当前数字人专属键
+  const legacy = readLocalStorageJson<unknown>(USER_MEMORY_STORAGE_KEY, null);
+  if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
+    const normalized = normalizeUserMemory(legacy);
+    window.localStorage.setItem(key, JSON.stringify(normalized));
+    window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
+    return normalized;
+  }
+  return { ...emptyUserMemory };
 }
 
-function writeStoredUserMemory(memory: UserMemory): UserMemory {
+function writeStoredUserMemory(memory: UserMemory, characterId?: string): UserMemory {
   const normalized = normalizeUserMemory({
     ...memory,
     updatedAt: new Date().toISOString()
   });
   if (typeof window !== "undefined") {
-    window.localStorage.setItem(USER_MEMORY_STORAGE_KEY, JSON.stringify(normalized));
+    window.localStorage.setItem(userMemoryKey(characterId), JSON.stringify(normalized));
   }
   return normalized;
 }
@@ -733,7 +756,7 @@ function buildLocalArchive(
     selectedCharacterId,
     avatarRenderMode,
     activeSceneId,
-    userMemory: readStoredUserMemory(),
+    userMemory: readStoredUserMemory(selectedCharacterId),
     localHumans: normalizeImportedHumans(readLocalStorageJson<unknown>(LOCAL_HUMANS_STORAGE_KEY, [])),
     localContexts: normalizeImportedContexts(readLocalStorageJson<unknown>(LOCAL_CONTEXT_STORAGE_KEY, {})),
     chatStates
@@ -788,7 +811,8 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
   const importedMemory = normalizeUserMemory(archive.userMemory);
   const hasMemory = hasUserMemory(importedMemory);
   if (hasMemory) {
-    window.localStorage.setItem(USER_MEMORY_STORAGE_KEY, JSON.stringify(importedMemory));
+    // 恢复到归档时所针对的数字人专属记忆键（而非全局键），保证不同数字人记忆隔离
+    window.localStorage.setItem(userMemoryKey(archive.selectedCharacterId), JSON.stringify(importedMemory));
   }
 
   return { humans: importedHumans.length, chats: importedChatCount, hasMemory };
@@ -1034,7 +1058,7 @@ export function ChatPanel({
   });
   const [avatarInteraction, setAvatarInteraction] = useState<CompanionInteractionId | null>(null);
   const [activeSceneId, setActiveSceneId] = useState<CompanionSceneId>(() => readStoredSceneId());
-  const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory());
+  const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory(selectedCharacterId));
   const [memoryStatus, setMemoryStatus] = useState("");
   const [form, setForm] = useState<NewCharacterForm>({
     name: "",
@@ -1073,12 +1097,25 @@ export function ChatPanel({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const activeChatStorageKeyRef = useRef("");
   const archiveInputRef = useRef<HTMLInputElement>(null);
+  const memoryInputRef = useRef<HTMLInputElement>(null);
   const interactionTimeoutRef = useRef<number | null>(null);
+
+  // 记忆总结模式（短上下文模型防超限）：开关状态与当前记忆档案
+  const [summaryMode, setSummaryModeState] = useState(false);
+  const [memoryFile, setMemoryFile] = useState("");
+  const [showMemory, setShowMemory] = useState(false);
+  const [summaryBusy, setSummaryBusy] = useState(false);
 
   const activeCharacter = characters.find((item) => item.id === state.characterId) || initialCharacter || characters[0];
   const activeScene = companionScenes.find((scene) => scene.id === activeSceneId) || companionScenes[0];
   const isCustomCharacter = (characterId: string) => characterId.startsWith("custom-");
   const memoryIsActive = hasUserMemory(userMemory);
+
+  // 切换数字人时，加载该数字人专属的长期记忆
+  useEffect(() => {
+    if (!selectedCharacterId) return;
+    setUserMemory(readStoredUserMemory(selectedCharacterId));
+  }, [selectedCharacterId]);
 
   useEffect(() => {
     if (!activeCharacter) return;
@@ -1113,6 +1150,31 @@ export function ChatPanel({
       return readStoredChatState(sessionId, preferred, welcomeText) ||
         buildDefaultChatState(preferred, preferred.id, welcomeText);
     });
+
+    // 打开/切换数字人时，从后端拉取与机器人共享的长期记忆并填充到本地消息
+    let cancelled = false;
+    (async () => {
+      const history = await fetchSessionHistory(sessionId);
+      if (cancelled) return;
+      if (history && history.length > 0) {
+        const remote: Bubble[] = history
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+        if (remote.length > 0) {
+          // 后端会话文件是跨端共享的唯一真相来源：打开/切换数字人时直接以其为准，
+          // 确保网页端能看到并继续机器人的历史对话（会话进行中不会触发本 effect，故不会覆盖正在输入的内容）。
+          setState((prev) => ({ ...prev, messages: remote }));
+        }
+      }
+      // 同步总结模式开关状态与当前记忆档案
+      const meta = await fetchSessionMeta(sessionId);
+      if (cancelled || !meta) return;
+      setSummaryModeState(meta.summaryMode);
+      setMemoryFile(meta.memoryFile || "");
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedCharacterId, characters, sessionId]);
 
   useEffect(() => {
@@ -1589,7 +1651,7 @@ export function ChatPanel({
 
   const saveUserMemory = () => {
     try {
-      const saved = writeStoredUserMemory(userMemory);
+      const saved = writeStoredUserMemory(userMemory, selectedCharacterId);
       setUserMemory(saved);
       setMemoryStatus(hasUserMemory(saved) ? "记忆已保存，会从下一条消息开始生效。" : "记忆已清空。");
     } catch {
@@ -1599,7 +1661,7 @@ export function ChatPanel({
 
   const clearUserMemory = () => {
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
+      window.localStorage.removeItem(userMemoryKey(selectedCharacterId));
     }
     setUserMemory({ ...emptyUserMemory });
     setMemoryStatus("记忆已清空。");
@@ -1953,6 +2015,55 @@ export function ChatPanel({
       if (archiveInputRef.current) {
         archiveInputRef.current.value = "";
       }
+    }
+  };
+
+  // 备份/恢复的是服务器端共享记忆（mem:<数字人ID>），跨设备/跨服务器可直接迁移
+  const backupMemory = async () => {
+    try {
+      await exportSessionHistory(sessionId);
+      setSpeechError("已下载当前数字人的记忆备份文件。");
+    } catch (error) {
+      setSpeechError(error instanceof Error ? error.message : "备份记忆失败");
+    }
+  };
+
+  const restoreMemory = async (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    try {
+      const result = await importSessionHistory(sessionId, file);
+      setSpeechError(`已恢复记忆（${result.turns} 条对话），正在刷新...`);
+      window.setTimeout(() => window.location.reload(), 400);
+    } catch (error) {
+      setSpeechError(error instanceof Error ? error.message : "恢复记忆失败");
+    } finally {
+      if (memoryInputRef.current) {
+        memoryInputRef.current.value = "";
+      }
+    }
+  };
+
+  // 开关记忆总结模式：开启后每轮只把「记忆档案 + 最近对话」发给模型，避免短上下文模型超限
+  const toggleSummaryMode = async () => {
+    if (summaryBusy) return;
+    setSummaryBusy(true);
+    try {
+      const next = !summaryMode;
+      const meta = await setSummaryMode(sessionId, next, state.characterId || selectedCharacterId);
+      setSummaryModeState(meta.summaryMode);
+      setMemoryFile(meta.memoryFile || "");
+      if (meta.summaryMode && meta.memoryFile) {
+        setShowMemory(true);
+        setSpeechError(`已开启记忆总结，并生成记忆档案（${meta.memoryFile.length} 字）。`);
+      } else {
+        setShowMemory(false);
+        setSpeechError("已关闭记忆总结，后续将发送完整历史（短上下文模型可能超限）。");
+      }
+    } catch (error) {
+      setSpeechError(error instanceof Error ? error.message : "设置总结模式失败");
+    } finally {
+      setSummaryBusy(false);
     }
   };
 
@@ -2452,6 +2563,21 @@ export function ChatPanel({
                 <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={isLoading}>
                   <Upload size={16} /> 导入记录
                 </button>
+                <button type="button" onClick={backupMemory} disabled={isLoading}>
+                  <Save size={16} /> 备份记忆
+                </button>
+                <button type="button" onClick={() => memoryInputRef.current?.click()} disabled={isLoading}>
+                  <RotateCcw size={16} /> 恢复记忆
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleSummaryMode}
+                  disabled={isLoading || summaryBusy}
+                  aria-pressed={summaryMode}
+                  title="开启后每轮只把「记忆档案 + 最近若干条」发给模型，避免短上下文模型超限"
+                >
+                  <FileText size={16} /> 记忆总结：{summaryMode ? "开" : "关"}
+                </button>
                 <button type="button" onClick={toggleAvatarMode}>
                   {use3D ? <ImageIcon size={16} /> : <Box size={16} />}
                   切换到 {use3D ? "2D" : "3D"}
@@ -2471,7 +2597,30 @@ export function ChatPanel({
             accept="application/json,.json"
             onChange={(event) => void importArchive(event.currentTarget.files)}
           />
+          <input
+            ref={memoryInputRef}
+            className="archive-input"
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => void restoreMemory(event.currentTarget.files)}
+          />
         </div>
+        {summaryMode && (
+          <div className="memory-summary-panel">
+            <button
+              type="button"
+              className="memory-summary-toggle"
+              onClick={() => setShowMemory((prev) => !prev)}
+            >
+              <FileText size={14} /> 记忆档案（{memoryFile.length} 字）{showMemory ? "▴" : "▾"}
+            </button>
+            {showMemory && (
+              <pre className="memory-summary-text">
+                {memoryFile.trim() || "（暂无内容，聊几句后会自动生成并压缩）"}
+              </pre>
+            )}
+          </div>
+        )}
         <div className="chat-list" ref={chatScrollRef}>
           {state.messages.map((message, idx) => (
             <div key={`${message.role}-${idx}`} className={`message-row ${message.role}`}>

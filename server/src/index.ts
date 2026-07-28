@@ -8,7 +8,7 @@ import { askAssistant, streamAssistant, StreamChunk } from "./services/llm";
 import { synthesizeSpeech } from "./services/tts";
 import { transcribeSpeechAudio } from "./services/transcription";
 import { inferEmotion } from "./services/emotion";
-import { appendToSession, buildSessionContext, clearSession, loadSession } from "./services/session";
+import { appendToSession, buildSessionContext, clearSession, importSession, loadSession, updateSessionMeta } from "./services/session";
 import {
   AvatarRenderMode,
   ChatRequestBody,
@@ -16,11 +16,12 @@ import {
   ChatResponse,
   RelationshipMode,
   DigitalHumanConfig,
-  EmotionProfile
+  EmotionProfile,
+  SessionContext
 } from "./types";
 
 // 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
-import { runChat } from "./core/chat";
+import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize } from "./core/chat";
 import {
   applyCharacterPatch,
   AUDIO_DIR,
@@ -303,7 +304,13 @@ app.post("/api/chat/stream", async (req, res) => {
     }
 
     const existingSession = await loadSession(sessionId);
-    const history = body.history?.length ? normalizeHistory(body.history) : (existingSession?.history ?? []);
+    const rawHistory = body.history?.length ? normalizeHistory(body.history) : (existingSession?.history ?? []);
+
+    // 总结模式：只把「记忆档案 + 最近窗口」发给模型，避免短上下文模型超限
+    const summaryMode = isSummaryModeEnabled(existingSession?.summaryMode);
+    const history = summaryMode
+      ? buildModelHistory({ history: rawHistory, summaryMode, memoryFile: existingSession?.memoryFile })
+      : rawHistory;
 
     res.status(200);
     res.set({
@@ -346,7 +353,12 @@ app.post("/api/chat/stream", async (req, res) => {
 
     const audioUrl = await synthesizeSpeech(answer.text, character);
     const nextContext = buildSessionContext(existingSession, message, answer.text, requestedRelationshipMode);
-    await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
+    const savedRecord = await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
+
+    // 总结模式：回合结束后按需重新生成记忆档案
+    if (summaryMode) {
+      await maybeSummarize(savedRecord, character);
+    }
     writeSse(res, "done", {
       sessionId,
       characterId: character.id,
@@ -386,6 +398,62 @@ app.delete("/api/session/:sessionId", async (req, res) => {
   const sessionId = String(req.params.sessionId || "");
   await clearSession(sessionId);
   res.json({ ok: true });
+});
+
+// 导入（恢复）一份会话记忆：用于跨设备/跨服务器备份迁移
+app.post("/api/session/:sessionId/import", async (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || "");
+    const { history, context, summaryMode, memoryFile } = (req.body || {}) as {
+      history?: unknown;
+      context?: unknown;
+      summaryMode?: boolean;
+      memoryFile?: string;
+    };
+    if (!Array.isArray(history)) {
+      return res.status(400).json({ error: "history 字段必须是数组" });
+    }
+    const normalized = normalizeHistory(history as ChatMessage[]);
+    const record = await importSession(
+      sessionId,
+      normalized,
+      context as SessionContext | undefined,
+      { summaryMode, memoryFile }
+    );
+    return res.json({ ok: true, sessionId: record.sessionId, turns: record.history.length });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "导入记忆失败";
+    return res.status(500).json({ error: message });
+  }
+});
+
+// 开关总结模式：开启时立即基于历史生成记忆档案
+app.post("/api/session/:sessionId/summary", async (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || "");
+    const { enabled, characterId } = (req.body || {}) as { enabled?: boolean; characterId?: string };
+    const flag = Boolean(enabled);
+    await updateSessionMeta(sessionId, { summaryMode: flag });
+
+    let memoryFile: string | undefined;
+    if (flag) {
+      const characters = await getCharacters();
+      const character = resolveCharacter(characters, characterId) || characters[0];
+      if (character) {
+        memoryFile = await generateMemoryForSession(sessionId, character);
+      }
+    }
+    const record = await loadSession(sessionId);
+    return res.json({
+      ok: true,
+      summaryMode: record?.summaryMode ?? flag,
+      memoryFile: record?.memoryFile,
+      turns: record?.history.length ?? 0
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "设置总结模式失败";
+    return res.status(500).json({ error: message });
+  }
 });
 
 app.delete("/api/digital-humans/:id", async (req, res) => {

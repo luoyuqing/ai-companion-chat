@@ -13,6 +13,10 @@ export interface SessionRecord {
   updatedAt: string;
   history: ChatMessage[];
   context?: SessionContext;
+  /** 总结模式：开启后每轮只向模型发送「记忆档案 + 最近若干条」，避免短上下文模型超限 */
+  summaryMode?: boolean;
+  /** 由模型生成的长期记忆档案，总结模式下替代逐轮全量历史 */
+  memoryFile?: string;
 }
 
 const SESSION_DIR = path.join(WORKSPACE_ROOT, "server", "src", "data", "sessions");
@@ -201,9 +205,37 @@ export async function appendToSession(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     history: nextHistory,
-    context: context ?? existing?.context
+    context: context ?? existing?.context,
+    summaryMode: existing?.summaryMode,
+    memoryFile: existing?.memoryFile
   };
 
+  await fs.writeFile(file, JSON.stringify(record, null, 2), "utf8");
+  return record;
+}
+
+/**
+ * 更新会话的元数据字段（总结模式开关、记忆档案），不影响已有历史与上下文。
+ */
+export async function updateSessionMeta(
+  sessionId: string,
+  patch: { summaryMode?: boolean; memoryFile?: string }
+): Promise<SessionRecord> {
+  const safeId = sanitizeSessionId(sessionId);
+  await fs.mkdir(SESSION_DIR, { recursive: true });
+  const file = path.join(SESSION_DIR, `${safeId}.json`);
+  const now = new Date().toISOString();
+  const existing = await loadSession(safeId);
+  const record: SessionRecord = existing
+    ? { ...existing, ...patch, updatedAt: now }
+    : {
+        sessionId: safeId,
+        createdAt: now,
+        updatedAt: now,
+        history: [],
+        summaryMode: patch.summaryMode,
+        memoryFile: patch.memoryFile
+      };
   await fs.writeFile(file, JSON.stringify(record, null, 2), "utf8");
   return record;
 }
@@ -212,4 +244,33 @@ export async function clearSession(sessionId: string): Promise<void> {
   const safeId = sanitizeSessionId(sessionId);
   const file = path.join(SESSION_DIR, `${safeId}.json`);
   await fs.rm(file, { force: true });
+}
+
+/**
+ * 把一份记忆（历史 + 上下文）写回会话文件，用于跨设备/跨服务器的备份恢复。
+ * 保留已有的 createdAt，updatedAt 刷新为当前时间；历史超出上限时截断最旧部分。
+ */
+export async function importSession(
+  sessionId: string,
+  history: ChatMessage[],
+  context?: SessionContext,
+  meta?: { summaryMode?: boolean; memoryFile?: string }
+): Promise<SessionRecord> {
+  const safeId = sanitizeSessionId(sessionId);
+  await fs.mkdir(SESSION_DIR, { recursive: true });
+  const file = path.join(SESSION_DIR, `${safeId}.json`);
+  const now = new Date().toISOString();
+  const existing = await loadSession(safeId);
+  const nextHistory = Array.isArray(history) ? history.slice(-MAX_TURNS_PER_SESSION) : [];
+  const record: SessionRecord = {
+    sessionId: safeId,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    history: nextHistory,
+    context: context ?? existing?.context,
+    summaryMode: meta?.summaryMode ?? existing?.summaryMode,
+    memoryFile: meta?.memoryFile ?? existing?.memoryFile
+  };
+  await fs.writeFile(file, JSON.stringify(record, null, 2), "utf8");
+  return record;
 }
