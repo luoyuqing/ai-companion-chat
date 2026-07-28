@@ -139,6 +139,7 @@ server {
     }
     location /audio/  { proxy_pass http://127.0.0.1:__PORT__; }
     location /models/ { proxy_pass http://127.0.0.1:__PORT__; }
+    location /avatars/ { proxy_pass http://127.0.0.1:__PORT__; }
     # /assets/ 本地前端构建产物优先（JS/CSS/头像），找不到再回落后端动态资源
     location /assets/ {
         try_files $uri @backend;
