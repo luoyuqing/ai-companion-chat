@@ -29,23 +29,53 @@ app.use(express.json({ limit: "30mb" }));
 
 const DATA_DIR = path.join(WORKSPACE_ROOT, "server", "src", "data");
 const CUSTOM_FILE = path.join(DATA_DIR, "custom-humans.json");
+const OVERRIDE_FILE = path.join(DATA_DIR, "human-overrides.json");
 const AUDIO_DIR = path.join(WORKSPACE_ROOT, "server", "data", "audio");
 const MODEL_DIR = path.join(WORKSPACE_ROOT, "server", "data", "models");
+const AVATAR_DIR = path.join(WORKSPACE_ROOT, "server", "data", "avatars");
 const STATIC_ASSETS_DIR = path.join(WORKSPACE_ROOT, "web", "public", "assets");
 const WEB_APP_URL = process.env.WEB_APP_URL?.trim() || "http://127.0.0.1:5173";
 const MAX_MODEL_BYTES = 25 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 8 * 1024 * 1024;
+
+type HumanOverrides = {
+  overrides: Record<string, Partial<DigitalHumanConfig>>;
+  hidden: string[];
+};
+
+async function loadHumanOverrides(): Promise<HumanOverrides> {
+  try {
+    const raw = await fs.readFile(OVERRIDE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as Partial<HumanOverrides>;
+    return {
+      overrides: parsed.overrides && typeof parsed.overrides === "object" ? parsed.overrides : {},
+      hidden: Array.isArray(parsed.hidden) ? parsed.hidden.map(String) : []
+    };
+  } catch {
+    return { overrides: {}, hidden: [] };
+  }
+}
+
+async function writeHumanOverrides(data: HumanOverrides): Promise<void> {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(OVERRIDE_FILE, JSON.stringify(data, null, 2), "utf8");
+}
 
 async function getCharacters(): Promise<DigitalHumanConfig[]> {
   const base = await fs.readFile(path.join(DATA_DIR, "digital-humans.json"), "utf8");
   const baseCharacters = JSON.parse(base) as DigitalHumanConfig[];
   const custom = await loadCustomHumans();
+  const { overrides, hidden } = await loadHumanOverrides();
   const normalize = (item: DigitalHumanConfig): DigitalHumanConfig => ({
     ...item,
     avatarType: normalizeAvatarType(item.avatarType),
     emotionProfile: item.emotionProfile,
     avatarVideoProfile: item.avatarVideoProfile
   });
-  return [...baseCharacters.map(normalize), ...custom.map(normalize)];
+  const mergedBase = baseCharacters
+    .filter((item) => !hidden.includes(item.id))
+    .map((item) => (overrides[item.id] ? { ...item, ...overrides[item.id], id: item.id } : item));
+  return [...mergedBase.map(normalize), ...custom.map(normalize)];
 }
 
 async function loadCustomHumans(): Promise<DigitalHumanConfig[]> {
@@ -159,6 +189,36 @@ function sanitizeModelFileName(rawName: unknown): string {
   return `${stem}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}${ext}`;
 }
 
+const AVATAR_EXT_BY_MIME: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/svg+xml": ".svg"
+};
+
+function sanitizeAvatarFileName(rawName: unknown, mimeType: unknown): string {
+  const baseName = path.basename(String(rawName || "avatar.png")).trim() || "avatar.png";
+  let ext = path.extname(baseName).toLowerCase();
+  const allowed = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"];
+  if (!allowed.includes(ext)) {
+    const mimeExt = AVATAR_EXT_BY_MIME[String(mimeType || "").toLowerCase().trim()];
+    if (!mimeExt) {
+      throw new Error("仅支持 png/jpg/webp/gif/svg 图片文件");
+    }
+    ext = mimeExt;
+  }
+  if (ext === ".jpeg") ext = ".jpg";
+
+  const stem = baseName
+    .slice(0, baseName.length - path.extname(baseName).length)
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "avatar";
+  return `${stem}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}${ext}`;
+}
+
 function decodeBase64Payload(raw: unknown): Buffer {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new Error("fileBase64 为必填项");
@@ -213,6 +273,32 @@ app.post("/api/models/upload", async (req, res) => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "模型上传失败";
+    res.status(400).json({ error: message });
+  }
+});
+
+app.post("/api/avatars/upload", async (req, res) => {
+  try {
+    const { fileName, fileBase64, mimeType } = (req.body || {}) as {
+      fileName?: unknown;
+      fileBase64?: unknown;
+      mimeType?: unknown;
+    };
+    const safeName = sanitizeAvatarFileName(fileName, mimeType);
+    const buffer = decodeBase64Payload(fileBase64);
+    if (buffer.byteLength > MAX_AVATAR_BYTES) {
+      return res.status(400).json({ error: "头像图片不能超过 8MB" });
+    }
+
+    await fs.mkdir(AVATAR_DIR, { recursive: true });
+    await fs.writeFile(path.join(AVATAR_DIR, safeName), buffer);
+    res.status(201).json({
+      avatarUrl: `/avatars/${safeName}`,
+      fileName: safeName,
+      size: buffer.byteLength
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "头像上传失败";
     res.status(400).json({ error: message });
   }
 });
@@ -281,6 +367,70 @@ app.post("/api/digital-humans", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "create digital human failed" });
+  }
+});
+
+app.patch("/api/digital-humans/:id", async (req, res) => {
+  try {
+    const characterId = String(req.params.id || "").trim();
+    if (!characterId) {
+      return res.status(400).json({ error: "digital human id is required" });
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const patch: Partial<DigitalHumanConfig> = {};
+
+    if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim();
+    if (typeof body.description === "string" && body.description.trim()) patch.description = body.description.trim();
+    if (typeof body.avatarUrl === "string" && body.avatarUrl.trim()) patch.avatarUrl = body.avatarUrl.trim();
+    if (typeof body.modelUrl === "string") patch.modelUrl = body.modelUrl.trim() || undefined;
+    if (typeof body.personalityTagline === "string") patch.personalityTagline = body.personalityTagline.trim() || undefined;
+    if (body.defaultMood !== undefined) patch.defaultMood = ensureSupportedMood(body.defaultMood as string);
+    if (body.relationshipMode !== undefined) patch.relationshipMode = ensureRelationshipMode(body.relationshipMode);
+    if (body.avatarType !== undefined) patch.avatarType = normalizeAvatarType(body.avatarType);
+
+    const voice = typeof body.voice === "string" ? body.voice.trim() : "";
+    const voiceProvider = body.voiceProvider;
+    if (voice || voiceProvider !== undefined) {
+      const characters = await getCharacters();
+      const current = characters.find((item) => item.id === characterId);
+      const provider =
+        voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" || voiceProvider === "openai"
+          ? voiceProvider
+          : current?.voiceProfile.provider || "mimo";
+      patch.voiceProfile = { provider, voice: voice || current?.voiceProfile.voice || "冰糖" };
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: "没有可更新的字段" });
+    }
+
+    // 自定义数字人：直接更新 custom-humans.json
+    const customs = await loadCustomHumans();
+    const customIdx = customs.findIndex((item) => item.id === characterId);
+    if (customIdx >= 0) {
+      customs[customIdx] = { ...customs[customIdx], ...patch, id: characterId } as DigitalHumanConfig;
+      await writeCustomHumans(customs);
+      return res.json({ human: customs[customIdx] });
+    }
+
+    // 内置数字人：写入覆盖文件
+    const base = await fs.readFile(path.join(DATA_DIR, "digital-humans.json"), "utf8");
+    const baseCharacters = JSON.parse(base) as DigitalHumanConfig[];
+    const baseHuman = baseCharacters.find((item) => item.id === characterId);
+    if (!baseHuman) {
+      return res.status(404).json({ error: "digital human not found" });
+    }
+
+    const overridesData = await loadHumanOverrides();
+    overridesData.overrides[characterId] = { ...(overridesData.overrides[characterId] || {}), ...patch };
+    delete (overridesData.overrides[characterId] as Record<string, unknown>).id;
+    await writeHumanOverrides(overridesData);
+    const merged = { ...baseHuman, ...overridesData.overrides[characterId], id: characterId } as DigitalHumanConfig;
+    res.json({ human: merged });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "update digital human failed" });
   }
 });
 
@@ -461,16 +611,33 @@ app.delete("/api/digital-humans/:id", async (req, res) => {
     return res.status(400).json({ error: "digital human id is required" });
   }
 
-  const deleted = await deleteCustomHumanById(characterId);
-  if (!deleted) {
-    return res.status(404).json({ error: "digital human not found or is built-in" });
+  const characters = await getCharacters();
+  if (!characters.some((item) => item.id === characterId)) {
+    return res.status(404).json({ error: "digital human not found" });
+  }
+  if (characters.length <= 1) {
+    return res.status(400).json({ error: "至少保留一个数字人，不能全部删除" });
   }
 
+  // 先按自定义数字人删除
+  const deleted = await deleteCustomHumanById(characterId);
+  if (deleted) {
+    return res.json({ ok: true });
+  }
+
+  // 内置数字人：加入隐藏列表（可通过清理 human-overrides.json 恢复）
+  const overridesData = await loadHumanOverrides();
+  if (!overridesData.hidden.includes(characterId)) {
+    overridesData.hidden.push(characterId);
+  }
+  delete overridesData.overrides[characterId];
+  await writeHumanOverrides(overridesData);
   res.json({ ok: true });
 });
 
 app.use("/audio", express.static(AUDIO_DIR));
 app.use("/models", express.static(MODEL_DIR));
+app.use("/avatars", express.static(AVATAR_DIR));
 app.use("/assets", express.static(STATIC_ASSETS_DIR));
 
 app.get("/healthz", (_req, res) => {

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { DigitalHuman, deleteDigitalHuman, fetchHumans } from "./services/api";
 
+
 type ViewMode = "landing" | "chat";
 type DeferredInstallPrompt = {
   prompt: () => Promise<void>;
@@ -124,6 +125,10 @@ export default function App() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(CHARACTER_STORAGE_KEY, nextId);
     }
+  };
+
+  const handleCharacterUpdate = (human: DigitalHuman) => {
+    setCharacters((current) => current.map((item) => (item.id === human.id ? human : item)));
   };
 
   const handleCharacterDelete = async (characterId: string) => {
@@ -266,6 +271,7 @@ export default function App() {
             handleCharacterChange(human.id);
           }}
           onDelete={handleCharacterDelete}
+          onUpdate={handleCharacterUpdate}
           onCharacterChange={handleCharacterChange}
         />
       )}

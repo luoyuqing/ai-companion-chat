@@ -11,6 +11,7 @@ import {
   Mic,
   MicOff,
   Moon,
+  Pencil,
   Save,
   Send,
   Settings2,
@@ -38,6 +39,8 @@ import {
   sendMessage,
   sendMessageStream,
   transcribeSpeech,
+  updateDigitalHuman,
+  uploadAvatarFile,
   uploadModelFile
 } from "../services/api";
 import { Avatar } from "./Avatar";
@@ -974,6 +977,7 @@ export function ChatPanel({
   onCreate,
   selectedCharacterId,
   onDelete,
+  onUpdate,
   onCharacterChange,
   onResetSession
 }: {
@@ -981,6 +985,7 @@ export function ChatPanel({
   sessionId: string;
   onCreate: (human: DigitalHuman) => void;
   onDelete: (characterId: string) => Promise<void> | void;
+  onUpdate: (human: DigitalHuman) => void;
   selectedCharacterId: string;
   onCharacterChange: (characterId: string) => void;
   onResetSession: () => void;
@@ -1032,6 +1037,18 @@ export function ChatPanel({
     personalityTagline: "",
     relationshipMode: "sweet"
   });
+  const [editForm, setEditForm] = useState({
+    name: "",
+    description: "",
+    avatarUrl: "",
+    voice: "冰糖",
+    defaultMood: "neutral" as (typeof moods)[number],
+    relationshipMode: "sweet" as (typeof relationshipModes)[number],
+    personalityTagline: ""
+  });
+  const [isEditSaving, setIsEditSaving] = useState(false);
+  const [editStatus, setEditStatus] = useState("");
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
@@ -1049,6 +1066,24 @@ export function ChatPanel({
   const activeScene = companionScenes.find((scene) => scene.id === activeSceneId) || companionScenes[0];
   const isCustomCharacter = (characterId: string) => characterId.startsWith("custom-");
   const memoryIsActive = hasUserMemory(userMemory);
+
+  useEffect(() => {
+    if (!activeCharacter) return;
+    setEditForm({
+      name: activeCharacter.name || "",
+      description: activeCharacter.description || "",
+      avatarUrl: activeCharacter.avatarUrl || "",
+      voice: activeCharacter.voiceProfile?.voice || "冰糖",
+      defaultMood: (moods as readonly string[]).includes(activeCharacter.defaultMood || "")
+        ? (activeCharacter.defaultMood as (typeof moods)[number])
+        : "neutral",
+      relationshipMode: relationshipModes.includes((activeCharacter.relationshipMode || "sweet") as (typeof relationshipModes)[number])
+        ? (activeCharacter.relationshipMode as (typeof relationshipModes)[number])
+        : "sweet",
+      personalityTagline: activeCharacter.personalityTagline || ""
+    });
+    setEditStatus("");
+  }, [activeCharacter?.id]);
 
   useEffect(() => {
     const preferred = characters.find((item) => item.id === selectedCharacterId) || characters[0];
@@ -1597,7 +1632,16 @@ export function ChatPanel({
     if (isLoading) return;
 
     const currentId = state.characterId || selectedCharacterId;
-    if (!currentId || !isCustomCharacter(currentId)) {
+    if (!currentId) {
+      return;
+    }
+    if (characters.length <= 1) {
+      setSpeechError("至少保留一个数字人，不能全部删除");
+      return;
+    }
+
+    const currentName = characters.find((item) => item.id === currentId)?.name || "该数字人";
+    if (typeof window !== "undefined" && !window.confirm(`确定删除「${currentName}」吗？删除后不可恢复。`)) {
       return;
     }
 
@@ -1617,6 +1661,83 @@ export function ChatPanel({
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleAvatarFile = async (fileList: FileList | null, target: "create" | "edit") => {
+    const file = fileList?.[0];
+    if (!file) return;
+
+    const isImage =
+      /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name) ||
+      /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(file.type);
+    if (!isImage) {
+      setSpeechError("请上传 png / jpg / webp / gif / svg 图片");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setSpeechError("头像图片不能超过 8MB");
+      return;
+    }
+
+    setIsAvatarUploading(true);
+    try {
+      const fileBase64 = await blobToBase64(file);
+      const uploaded = await uploadAvatarFile({
+        fileName: file.name,
+        fileBase64,
+        mimeType: file.type || undefined
+      });
+      if (target === "create") {
+        setForm((prev) => ({ ...prev, avatarUrl: uploaded.avatarUrl }));
+        setSpeechError("头像已上传 ✓");
+      } else {
+        setEditForm((prev) => ({ ...prev, avatarUrl: uploaded.avatarUrl }));
+        setEditStatus("头像已上传，记得点「保存修改」生效");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "头像上传失败";
+      if (target === "create") {
+        setSpeechError(message);
+      } else {
+        setEditStatus(message);
+      }
+    } finally {
+      setIsAvatarUploading(false);
+    }
+  };
+
+  const saveEdit = async (evt: FormEvent) => {
+    evt.preventDefault();
+    if (isEditSaving || isAvatarUploading) return;
+
+    const currentId = state.characterId || selectedCharacterId;
+    if (!currentId) return;
+
+    if (!editForm.name.trim() || !editForm.description.trim()) {
+      setEditStatus("名字和人设描述不能为空");
+      return;
+    }
+
+    setIsEditSaving(true);
+    setEditStatus("");
+    try {
+      const { human } = await updateDigitalHuman(currentId, {
+        name: editForm.name.trim(),
+        description: editForm.description.trim(),
+        avatarUrl: editForm.avatarUrl.trim() || undefined,
+        voice: editForm.voice.trim() || "冰糖",
+        voiceProvider: "mimo",
+        defaultMood: editForm.defaultMood,
+        relationshipMode: editForm.relationshipMode,
+        personalityTagline: editForm.personalityTagline.trim()
+      });
+      onUpdate(human);
+      setEditStatus("已保存 ✓");
+    } catch (error) {
+      setEditStatus(error instanceof Error ? error.message : "保存失败，请重试");
+    } finally {
+      setIsEditSaving(false);
     }
   };
 
@@ -1851,11 +1972,9 @@ export function ChatPanel({
               </option>
             ))}
           </select>
-          {isCustomCharacter(state.characterId) ? (
-            <button type="button" className="delete-btn" onClick={removeCharacter} disabled={isLoading}>
-              删除当前数字人
-            </button>
-          ) : null}
+          <button type="button" className="delete-btn" onClick={removeCharacter} disabled={isLoading || characters.length <= 1}>
+            <Trash2 size={14} /> 删除当前数字人
+          </button>
           <p className="desc">{characters.find((c) => c.id === state.characterId)?.description}</p>
         </div>
 
@@ -1871,6 +1990,118 @@ export function ChatPanel({
           use3D={use3D}
           interaction={avatarInteraction}
         />
+
+        <details className="side-disclosure">
+          <summary><Save size={16} /> 编辑当前数字人</summary>
+          <form onSubmit={saveEdit} className="creator creator-v2">
+            <label className="field">
+              <span className="field-label">名字</span>
+              <input
+                value={editForm.name}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="数字人名字"
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">人设描述</span>
+              <input
+                value={editForm.description}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="她的性格、身份、说话风格"
+              />
+            </label>
+
+            <div className="field">
+              <span className="field-label">头像（静态图片）</span>
+              <label className="file-picker">
+                {isAvatarUploading ? "上传中..." : "上传新头像（png/jpg/webp/gif/svg，≤8MB）"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                  disabled={isAvatarUploading}
+                  onChange={(e) => handleAvatarFile(e.currentTarget.files, "edit")}
+                />
+              </label>
+              <input
+                value={editForm.avatarUrl}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
+                placeholder="也可直接粘贴图片 URL"
+              />
+              {editForm.avatarUrl ? (
+                <img
+                  src={resolveMediaUrl(editForm.avatarUrl)}
+                  alt="头像预览"
+                  style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
+                />
+              ) : null}
+            </div>
+
+            <label className="field">
+              <span className="field-label">音色</span>
+              <select
+                value={editForm.voice === "冰糖" ? "冰糖" : ""}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value || "" }))}
+              >
+                <option value="冰糖">冰糖（推荐）</option>
+                <option value="">其他音色（请在下方填写）</option>
+              </select>
+              {editForm.voice !== "冰糖" && (
+                <input
+                  value={editForm.voice}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value }))}
+                  placeholder="填写 MiMo 音色名称"
+                />
+              )}
+            </label>
+
+            <label className="field">
+              <span className="field-label">默认情绪</span>
+              <select
+                value={editForm.defaultMood}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, defaultMood: e.target.value as (typeof moods)[number] }))
+                }
+              >
+                {moods.map((mood) => (
+                  <option key={mood} value={mood}>
+                    {moodLabelMap[mood]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">关系模式</span>
+              <select
+                value={editForm.relationshipMode}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))
+                }
+              >
+                {relationshipModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {relationshipModeLabelMap[mode]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">人设口令（可选）</span>
+              <input
+                value={editForm.personalityTagline}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
+                placeholder="例如：轻松撒娇，但不越界"
+              />
+            </label>
+
+            {editStatus ? <small className="field-hint">{editStatus}</small> : null}
+            <button type="submit" disabled={isEditSaving || isAvatarUploading}>
+              {isEditSaving ? "保存中..." : "保存修改"}
+            </button>
+          </form>
+        </details>
 
         <details className="side-disclosure">
           <summary><Sparkles size={16} /> 创建数字人</summary>
@@ -1893,14 +2124,30 @@ export function ChatPanel({
               />
             </label>
 
-            <label className="field">
-              <span className="field-label">头像地址</span>
+            <div className="field">
+              <span className="field-label">头像（静态图片）</span>
+              <label className="file-picker">
+                {isAvatarUploading ? "上传中..." : "上传头像图片（png/jpg/webp/gif/svg，≤8MB）"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                  disabled={isAvatarUploading}
+                  onChange={(e) => handleAvatarFile(e.currentTarget.files, "create")}
+                />
+              </label>
               <input
                 value={form.avatarUrl}
                 onChange={(e) => setForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
-                placeholder="图片 URL，留空使用默认头像"
+                placeholder="也可直接粘贴图片 URL，留空使用默认头像"
               />
-            </label>
+              {form.avatarUrl ? (
+                <img
+                  src={resolveMediaUrl(form.avatarUrl)}
+                  alt="头像预览"
+                  style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
+                />
+              ) : null}
+            </div>
 
             <details className="creator-advanced">
               <summary>3D 模型（可选，默认使用静态头像）</summary>

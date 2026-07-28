@@ -95,6 +95,8 @@ export interface CreateHumanRequest {
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
 }
 
+export type UpdateHumanRequest = Partial<CreateHumanRequest>;
+
 declare global {
   interface Window {
     __DG_API_BASE?: string;
@@ -704,6 +706,42 @@ export async function createDigitalHuman(payload: CreateHumanRequest) {
     saveLocalCustomHumans([...getLocalCustomHumans(), human]);
     return { human };
   }
+}
+
+export async function updateDigitalHuman(id: string, payload: UpdateHumanRequest): Promise<{ human: DigitalHuman }> {
+  const res = await fetch(`${API_BASE}/api/digital-humans/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const message = await res
+      .json()
+      .then((data: { error?: string }) => data?.error)
+      .catch(() => "");
+    throw new Error(message || "更新数字人失败");
+  }
+  return res.json();
+}
+
+export async function uploadAvatarFile(params: {
+  fileName: string;
+  fileBase64: string;
+  mimeType?: string;
+}): Promise<{ avatarUrl: string; fileName: string; size: number }> {
+  const res = await fetch(`${API_BASE}/api/avatars/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params)
+  });
+  if (!res.ok) {
+    const message = await res
+      .json()
+      .then((data: { error?: string }) => data?.error)
+      .catch(() => "");
+    throw new Error(message || "头像上传失败");
+  }
+  return res.json();
 }
 
 export async function deleteDigitalHuman(id: string): Promise<void> {
