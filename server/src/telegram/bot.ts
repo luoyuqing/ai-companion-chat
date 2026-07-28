@@ -124,7 +124,19 @@ async function replyWithTextAndVoice(
     if (!audioUrl) return;
     const audioPath = audioUrlToPath(audioUrl);
     if (audioPath && (await fs.stat(audioPath).catch(() => null))) {
-      await ctx.replyWithVoice(new InputFile(audioPath));
+      // Telegram 语音消息仅支持 OGG/Opus 容器，MiMo 产出的是 MP3，需转码
+      const oggPath = path.join(
+        os.tmpdir(),
+        `dg-voice-${Date.now()}-${Math.random().toString(16).slice(2)}.ogg`
+      );
+      try {
+        await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
+        await ctx.replyWithVoice(new InputFile(oggPath));
+        await fs.unlink(oggPath).catch(() => {});
+      } catch (convErr) {
+        console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
+        await ctx.replyWithAudio(new InputFile(audioPath));
+      }
       await fs.unlink(audioPath).catch(() => {});
     }
   } catch (err) {
