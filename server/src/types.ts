@@ -35,7 +35,7 @@ export interface DigitalHumanConfig {
   personalityTagline?: string;
   relationshipMode?: RelationshipMode;
   voiceProfile: {
-    provider: "openai" | "azure" | "local";
+    provider: "openai" | "azure" | "local" | "mimo";
     voice: string;
   };
   defaultMood: Emotion;

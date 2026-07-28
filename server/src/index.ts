@@ -247,7 +247,7 @@ app.post("/api/digital-humans", async (req, res) => {
       avatarUrl?: string;
       modelUrl?: string;
       voice?: string;
-      voiceProvider?: "openai" | "azure" | "local";
+      voiceProvider?: "openai" | "azure" | "local" | "mimo";
       defaultMood?: DigitalHumanConfig["defaultMood"];
       emotionProfile?: EmotionProfile;
       avatarType?: AvatarRenderMode | string;
@@ -271,7 +271,7 @@ app.post("/api/digital-humans", async (req, res) => {
       emotionProfile: normalizeExpressionProfile(emotionProfile),
       avatarType: normalizeAvatarType(avatarType),
       avatarVideoProfile: normalizeExpressionProfile(avatarVideoProfile),
-      voiceProfile: { provider: (voiceProvider === "azure" || voiceProvider === "local" ? voiceProvider : "openai"), voice },
+      voiceProfile: { provider: (voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" ? voiceProvider : "openai"), voice },
       relationshipMode: ensureRelationshipMode(relationshipMode),
       defaultMood: ensureSupportedMood(defaultMood)
     };

@@ -285,6 +285,23 @@ const relationshipLabelMap: Record<ChatContext["relationshipAffinity"], string> 
   intimate: "亲密"
 };
 
+const moodLabelMap: Record<(typeof moods)[number], string> = {
+  neutral: "平静",
+  happy: "开心",
+  sad: "难过",
+  surprise: "惊讶",
+  wink: "俏皮",
+  angry: "生气",
+  love: "爱意"
+};
+
+const relationshipModeLabelMap: Record<(typeof relationshipModes)[number], string> = {
+  sweet: "甜蜜陪伴",
+  flirty: "暧昧撩人",
+  playful: "轻松调皮",
+  mature: "成熟直率"
+};
+
 const inferLocalEmotion = (text: string): LocalEmotion => {
   const normalized = text.toLowerCase();
   let maxScore = 0;
@@ -766,7 +783,7 @@ interface NewCharacterForm {
   description: string;
   avatarUrl: string;
   modelUrl: string;
-  voiceProvider: "openai" | "azure" | "local";
+  voiceProvider: "openai" | "azure" | "local" | "mimo";
   voice: string;
   defaultMood: (typeof moods)[number];
   emotionProfile: string;
@@ -1006,8 +1023,8 @@ export function ChatPanel({
     description: "",
     avatarUrl: defaultAvatarUrl,
     modelUrl: "",
-    voiceProvider: "openai",
-    voice: "nova",
+    voiceProvider: "mimo",
+    voice: "冰糖",
     defaultMood: "neutral",
     emotionProfile: "{}",
     avatarType: "image",
@@ -1678,8 +1695,8 @@ export function ChatPanel({
         description: "",
         avatarUrl: defaultAvatarUrl,
         modelUrl: "",
-        voiceProvider: "openai",
-        voice: "nova",
+        voiceProvider: "mimo",
+        voice: "冰糖",
         emotionProfile: "{}",
         avatarType: "image",
         avatarVideoProfile: "{}",
@@ -1857,91 +1874,131 @@ export function ChatPanel({
 
         <details className="side-disclosure">
           <summary><Sparkles size={16} /> 创建数字人</summary>
-          <form onSubmit={create} className="creator">
-          <input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="名字" />
-          <input
-            value={form.description}
-            onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-            placeholder="人设描述"
-          />
-          <input
-            value={form.avatarUrl}
-            onChange={(e) => setForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
-            placeholder="头像地址"
-          />
-          <input
-            value={form.modelUrl}
-            onChange={(e) => setForm((prev) => ({ ...prev, modelUrl: e.target.value }))}
-            placeholder="3D模型地址（GLB/GLTF，可选）"
-          />
-          <label className="file-picker">
-            上传 GLB/GLTF 模型
-            <input
-              type="file"
-              accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
-              onChange={(e) => handleModelFile(e.currentTarget.files)}
-            />
-          </label>
-          <input value={form.voice} onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))} placeholder="声音 ID（例如 alloy/nova）" />
-          <select
-            value={form.voiceProvider}
-            onChange={(e) => setForm((prev) => ({ ...prev, voiceProvider: e.target.value as "openai" | "azure" | "local" }))}
-          >
-            <option value="openai">OpenAI TTS</option>
-            <option value="azure">Azure TTS（需配置服务）</option>
-            <option value="local">本地/禁用 TTS</option>
-          </select>
-          <select
-            value={form.defaultMood}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, defaultMood: e.target.value as (typeof moods)[number] }))
-            }
-          >
-            {moods.map((mood) => (
-              <option key={mood} value={mood}>
-                {mood}
-              </option>
-            ))}
-          </select>
-          <input
-            value={form.personalityTagline}
-            onChange={(e) => setForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
-            placeholder="人设口令（例如：轻松撒娇，但不越界）"
-          />
-          <select
-            value={form.relationshipMode}
-            onChange={(e) => setForm((prev) => ({ ...prev, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))}
-          >
-            {relationshipModes.map((mode) => (
-              <option key={mode} value={mode}>
-                {mode}
-              </option>
-            ))}
-          </select>
-          <select
-            value={form.avatarType}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, avatarType: e.target.value === "video" ? "video" : "image" }))
-            }
-          >
-            <option value="image">头像/表情图模式</option>
-            <option value="video">情绪视频模式</option>
-          </select>
-          <textarea
-            rows={3}
-            value={form.emotionProfile}
-            onChange={(e) => setForm((prev) => ({ ...prev, emotionProfile: e.target.value }))}
-            placeholder={`情绪头像（可选）示例：{ "happy": "https://.../happy.png", "sad": "${assetPlaceholderBase}/expressions/sad.svg", "wink": "..." }`}
-          />
-          <textarea
-            rows={3}
-            value={form.avatarVideoProfile}
-            onChange={(e) => setForm((prev) => ({ ...prev, avatarVideoProfile: e.target.value }))}
-            placeholder={`情绪视频（可选，avatarType=video时生效）示例：{ "happy": "${assetPlaceholderBase}/videos/happy.mp4", "neutral": "https://.../neutral.mp4" }`}
-          />
-          <button type="submit" disabled={isModelUploading}>
-            {isModelUploading ? "上传模型中..." : "创建"}
-          </button>
+          <form onSubmit={create} className="creator creator-v2">
+            <label className="field">
+              <span className="field-label">名字</span>
+              <input
+                value={form.name}
+                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="例如：小冰"
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">人设描述</span>
+              <input
+                value={form.description}
+                onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="她的性格、身份、说话风格，例如：温柔懂事的女大学生"
+              />
+            </label>
+
+            <label className="field">
+              <span className="field-label">头像地址</span>
+              <input
+                value={form.avatarUrl}
+                onChange={(e) => setForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
+                placeholder="图片 URL，留空使用默认头像"
+              />
+            </label>
+
+            <details className="creator-advanced">
+              <summary>3D 模型（可选，默认使用静态头像）</summary>
+              <label className="field">
+                <span className="field-label">模型地址</span>
+                <input
+                  value={form.modelUrl}
+                  onChange={(e) => setForm((prev) => ({ ...prev, modelUrl: e.target.value }))}
+                  placeholder="GLB/GLTF 在线地址，或从下方上传"
+                />
+              </label>
+              <label className="file-picker">
+                上传 GLB/GLTF 模型
+                <input
+                  type="file"
+                  accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+                  onChange={(e) => handleModelFile(e.currentTarget.files)}
+                />
+              </label>
+            </details>
+
+            <label className="field">
+              <span className="field-label">音色</span>
+              <select
+                value={form.voice || ""}
+                onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))}
+              >
+                <option value="冰糖">冰糖（推荐）</option>
+                <option value="">其他音色（请在下方填写）</option>
+              </select>
+              {form.voice !== "冰糖" && (
+                <input
+                  value={form.voice}
+                  onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))}
+                  placeholder="填写 MiMo 音色名称"
+                />
+              )}
+              <small className="field-hint">语音合成由 MiMo TTS 自动接入，无需额外配置 OpenAI/Azure。</small>
+            </label>
+
+            <label className="field">
+              <span className="field-label">默认情绪</span>
+              <select
+                value={form.defaultMood}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, defaultMood: e.target.value as (typeof moods)[number] }))
+                }
+              >
+                {moods.map((mood) => (
+                  <option key={mood} value={mood}>
+                    {moodLabelMap[mood]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">关系模式</span>
+              <select
+                value={form.relationshipMode}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))
+                }
+              >
+                {relationshipModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {relationshipModeLabelMap[mode]}
+                  </option>
+                ))}
+              </select>
+              <small className="field-hint">决定她和你互动的整体语气。</small>
+            </label>
+
+            <label className="field">
+              <span className="field-label">头像模式</span>
+              <select
+                value={form.avatarType}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, avatarType: e.target.value === "video" ? "video" : "image" }))
+                }
+              >
+                <option value="image">静态头像</option>
+                <option value="video">动态视频（需额外提供情绪视频资源）</option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span className="field-label">人设口令（可选）</span>
+              <input
+                value={form.personalityTagline}
+                onChange={(e) => setForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
+                placeholder="例如：轻松撒娇，但不越界"
+              />
+            </label>
+
+            <button type="submit" disabled={isModelUploading}>
+              {isModelUploading ? "上传模型中..." : "创建"}
+            </button>
           </form>
         </details>
 

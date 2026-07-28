@@ -76,7 +76,7 @@ export interface DigitalHuman {
   avatarVideoProfile?: EmotionProfile;
   personalityTagline?: string;
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
-  voiceProfile: { provider: "openai" | "azure" | "local"; voice: string };
+  voiceProfile: { provider: "openai" | "azure" | "local" | "mimo"; voice: string };
   defaultMood: Emotion;
 }
 
@@ -86,7 +86,7 @@ export interface CreateHumanRequest {
   avatarUrl: string;
   modelUrl?: string;
   avatarType?: "image" | "video";
-  voiceProvider?: "openai" | "azure" | "local";
+  voiceProvider?: "openai" | "azure" | "local" | "mimo";
   voice: string;
   defaultMood?: Emotion;
   emotionProfile?: EmotionProfile;
