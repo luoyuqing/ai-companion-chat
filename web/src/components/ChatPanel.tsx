@@ -70,6 +70,19 @@ const voiceStyleOptions: Array<{ id: VoiceStyle; label: string }> = [
   { id: "mature", label: "沉稳" }
 ];
 
+// MiMo mimo-v2.5-tts 官方可选音色（来源：https://mimo.mi.com/docs/zh-CN/api/audio/tts）
+const MIMO_VOICE_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: "冰糖", label: "冰糖（推荐 · 温柔女声）" },
+  { id: "mimo_default", label: "mimo_default（默认通用女声）" },
+  { id: "茉莉", label: "茉莉" },
+  { id: "苏打", label: "苏打" },
+  { id: "白桦", label: "白桦" },
+  { id: "Mia", label: "Mia" },
+  { id: "Chloe", label: "Chloe" },
+  { id: "Milo", label: "Milo" },
+  { id: "Dean", label: "Dean" }
+];
+
 type CompanionSceneId = "daily" | "date" | "comfort" | "flirty" | "bedtime";
 
 interface CompanionScene {
@@ -2040,13 +2053,15 @@ export function ChatPanel({
             <label className="field">
               <span className="field-label">音色</span>
               <select
-                value={editForm.voice === "冰糖" ? "冰糖" : ""}
+                value={MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voice) ? editForm.voice : ""}
                 onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value || "" }))}
               >
-                <option value="冰糖">冰糖（推荐）</option>
+                {MIMO_VOICE_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
                 <option value="">其他音色（请在下方填写）</option>
               </select>
-              {editForm.voice !== "冰糖" && (
+              {(editForm.voice === "" || !MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voice)) && (
                 <input
                   value={editForm.voice}
                   onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value }))}
@@ -2172,13 +2187,15 @@ export function ChatPanel({
             <label className="field">
               <span className="field-label">音色</span>
               <select
-                value={form.voice || ""}
-                onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))}
+                value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voice) ? form.voice : ""}
+                onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value || "" }))}
               >
-                <option value="冰糖">冰糖（推荐）</option>
+                {MIMO_VOICE_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
                 <option value="">其他音色（请在下方填写）</option>
               </select>
-              {form.voice !== "冰糖" && (
+              {(form.voice === "" || !MIMO_VOICE_OPTIONS.some((o) => o.id === form.voice)) && (
                 <input
                   value={form.voice}
                   onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))}
