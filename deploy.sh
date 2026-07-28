@@ -139,7 +139,14 @@ server {
     }
     location /audio/  { proxy_pass http://127.0.0.1:__PORT__; }
     location /models/ { proxy_pass http://127.0.0.1:__PORT__; }
-    location /assets/ { proxy_pass http://127.0.0.1:__PORT__; }
+    # /assets/ 本地前端构建产物优先（JS/CSS/头像），找不到再回落后端动态资源
+    location /assets/ {
+        try_files $uri @backend;
+    }
+    location @backend {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_set_header Host $host;
+    }
     location /healthz { proxy_pass http://127.0.0.1:__PORT__; }
 
     location / {
