@@ -149,6 +149,18 @@ server {
     }
     location /healthz { proxy_pass http://127.0.0.1:__PORT__; }
 
+    # 防止 Service Worker 与入口 HTML 被浏览器缓存，确保更新即时生效
+    location = /sw.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        try_files $uri =404;
+    }
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        try_files $uri =404;
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }
