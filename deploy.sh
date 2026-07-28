@@ -72,6 +72,8 @@ if [ -z "$NODE_BIN" ]; then
 fi
 echo "使用 node: $NODE_BIN"
 TSX_BIN="$SERVER_DIR/node_modules/.bin/tsx"
+# npm workspaces 会把依赖提升到仓库根目录
+if [ ! -x "$TSX_BIN" ]; then TSX_BIN="$(cd "$SERVER_DIR/.." && pwd)/node_modules/.bin/tsx"; fi
 if [ ! -x "$TSX_BIN" ]; then
   echo "错误: 未找到 tsx，npm install 可能失败" >&2
   exit 1
