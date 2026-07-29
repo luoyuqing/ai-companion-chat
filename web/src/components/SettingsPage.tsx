@@ -212,7 +212,9 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
           {active === "tts" && settings && (
             <div className="settings-card">
               <h2>TTS 语音模型</h2>
-              <p className="settings-hint">语音合成固定使用小米 MiMo，无需修改地址与模型，仅可配置密钥。</p>
+              <p className="settings-hint">
+                语音服务固定使用小米 MiMo，仅可配置密钥。此密钥同时用于语音合成（TTS）、声音设计、声音克隆与语音识别（ASR），改一处全部生效。
+              </p>
 
               <div className="settings-readonly">
                 <div>
@@ -224,14 +226,14 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                   <strong>{settings.tts.baseUrl}</strong>
                 </div>
                 <div>
-                  <span>模型</span>
-                  <strong>{settings.tts.model}</strong>
+                  <span>默认模型</span>
+                  <strong>{settings.tts.model}（仅数字人未单独配置音频模型时使用，可被每个数字人的语音设置覆盖）</strong>
                 </div>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  MiMo API Key
+                  MiMo API Key（TTS + ASR 共用）
                   {settings.tts.hasApiKey ? <em className="settings-saved">已保存</em> : null}
                 </span>
                 <input
