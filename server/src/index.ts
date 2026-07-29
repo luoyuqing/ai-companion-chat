@@ -52,6 +52,7 @@ import {
   writeHumanOverrides
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
+import { publicSystemConfig, saveSystemConfig, getLlmConfig, type SystemConfigInput } from "./core/config";
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
@@ -67,6 +68,48 @@ app.get("/api/digital-humans", async (_req, res) => {
   const safe = humans.map(({ telegramBotToken, ...rest }) => rest);
   res.json({ humans: safe });
 });
+
+// ---------- 系统设置（可扩展：后续菜单/配置项统一挂载到 GET /api/settings） ----------
+app.get("/api/settings", (_req, res) => {
+  res.json(publicSystemConfig());
+});
+
+app.put("/api/settings", (req, res) => {
+  const body = (req.body || {}) as SystemConfigInput;
+  try {
+    saveSystemConfig({ llm: body.llm, tts: body.tts });
+    res.json(publicSystemConfig());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "保存设置失败" });
+  }
+});
+
+app.post("/api/settings/llm/models", async (req, res) => {
+  const cfg = getLlmConfig();
+  const baseUrl = String((req.body as { baseUrl?: string })?.baseUrl || "").trim() || cfg.baseUrl;
+  const apiKey = String((req.body as { apiKey?: string })?.apiKey || "").trim() || cfg.apiKey;
+  if (!baseUrl || !apiKey) {
+    return res.status(400).json({ error: "baseUrl 与 apiKey 必填（可在表单填写，或使用已保存的配置）" });
+  }
+  try {
+    const url = String(baseUrl).replace(/\/+$/, "") + "/models";
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey.trim()}` }
+    });
+    if (!resp.ok) {
+      const message = await resp.text().catch(() => "");
+      return res.status(resp.status).json({ error: `拉取模型清单失败：${message.slice(0, 300)}` });
+    }
+    const data = (await resp.json()) as { data?: Array<{ id?: string }> };
+    const models = (data.data || [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean);
+    res.json({ models });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "拉取模型清单失败" });
+  }
+});
+
 
 app.post("/api/models/upload", async (req, res) => {
   try {

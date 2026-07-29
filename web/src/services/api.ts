@@ -962,3 +962,84 @@ export function resolveMediaUrl(url?: string): string | undefined {
   }
   return `${API_BASE}/${trimmed}`;
 }
+
+// ---------- 系统设置（可扩展：与后端 /api/settings 对应） ----------
+export interface LlmSettings {
+  baseUrl: string;
+  hasApiKey: boolean;
+  model: string;
+  supportsVision: boolean;
+}
+
+export interface TtsSettings {
+  provider: string;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+}
+
+export interface SystemSettings {
+  llm: LlmSettings;
+  tts: TtsSettings;
+  [key: string]: unknown;
+}
+
+export interface LlmSettingsInput {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  supportsVision?: boolean;
+}
+
+export interface TtsSettingsInput {
+  apiKey?: string;
+}
+
+export interface SystemSettingsInput {
+  llm?: LlmSettingsInput;
+  tts?: TtsSettingsInput;
+}
+
+export async function getSettings(): Promise<SystemSettings> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" }
+  });
+  if (!res.ok) {
+    const message = await res.text().catch(() => "加载设置失败");
+    throw new Error(message || "加载设置失败");
+  }
+  return res.json();
+}
+
+export async function updateSettings(input: SystemSettingsInput): Promise<SystemSettings> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  if (!res.ok) {
+    const message = await res
+      .json()
+      .then((data: { error?: string }) => data?.error)
+      .catch(() => "");
+    throw new Error(message || "保存设置失败");
+  }
+  return res.json();
+}
+
+export async function fetchLlmModels(baseUrl: string, apiKey: string): Promise<{ models: string[] }> {
+  const res = await fetch(`${API_BASE}/api/settings/llm/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ baseUrl, apiKey })
+  });
+  if (!res.ok) {
+    const message = await res
+      .json()
+      .then((data: { error?: string }) => data?.error)
+      .catch(() => "");
+    throw new Error(message || "拉取模型清单失败");
+  }
+  return res.json();
+}

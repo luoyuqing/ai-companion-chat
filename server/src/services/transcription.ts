@@ -2,14 +2,15 @@ import OpenAI from "openai";
 import fs from "node:fs";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
+import { getTtsConfig, getLlmConfig } from "../core/config";
 
 function getOpenAiClient(): OpenAI | null {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = getLlmConfig().apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
   return new OpenAI({
     apiKey,
-    baseURL: process.env.OPENAI_BASE_URL
+    baseURL: getLlmConfig().baseUrl || process.env.OPENAI_BASE_URL || undefined
   });
 }
 
@@ -88,12 +89,13 @@ export async function transcribeSpeechAudio(options: {
 }
 
 async function transcribeWithMimo(buffer: Buffer, mimeType?: string): Promise<string> {
-  const apiKey = process.env.MIMO_API_KEY;
+  const cfg = getTtsConfig();
+  const apiKey = cfg.apiKey || process.env.MIMO_API_KEY;
   if (!apiKey) {
     throw new Error("MIMO_API_KEY 未配置，无法进行语音转写");
   }
 
-  const baseURL = process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1";
+  const baseURL = cfg.baseUrl || process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1";
   const model = process.env.MIMO_ASR_MODEL || "mimo-v2.5-asr";
   const fmt = mimeType && mimeType.toLowerCase().includes("mp3")
     ? "mp3"

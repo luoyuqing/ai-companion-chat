@@ -1,0 +1,211 @@
+/* ============ 系统设置页 ============ */
+.settings-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-shell > * {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  background: #171e31;
+  color: #cdd9f0;
+  border: 1px solid #2e4066;
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.settings-nav-item:hover {
+  background: #1d2742;
+}
+
+.settings-nav-item.active {
+  background: #2f4f7a;
+  color: #eaf2ff;
+  border-color: #3f6fa8;
+}
+
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-card {
+  background: #171e31;
+  border: 1px solid #2e4066;
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.settings-hint {
+  margin: 0;
+  color: #9fb2d4;
+  font-size: 13px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-label {
+  font-size: 13px;
+  color: #cdd9f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-saved {
+  font-style: normal;
+  font-size: 11px;
+  color: #071022;
+  background: #5fbf8f;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.settings-model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-model-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-chip {
+  background: #202e49;
+  color: #cdd9f0;
+  border: 1px solid #34405e;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.settings-chip:hover {
+  background: #2a3c5e;
+}
+
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #e6eefc;
+  cursor: pointer;
+}
+
+.settings-checkbox input {
+  width: auto;
+  padding: 0;
+}
+
+.settings-readonly {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px 14px;
+  background: #111a2d;
+  border: 1px solid #2a3a5c;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.settings-readonly > div {
+  display: contents;
+}
+
+.settings-readonly span {
+  color: #9fb2d4;
+  font-size: 13px;
+}
+
+.settings-readonly strong {
+  color: #e6eefc;
+  font-weight: 600;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.settings-save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-save-btn {
+  background: #2f9bff;
+  color: #071022;
+  font-weight: 600;
+  padding: 12px 22px;
+}
+
+.settings-save-btn:disabled {
+  opacity: 0.5;
+}
+
+.settings-status-ok {
+  color: #5fbf8f;
+  font-size: 13px;
+}
+
+.settings-status-error {
+  color: #ff8585;
+  font-size: 13px;
+}
+
+.settings-status-hidden {
+  visibility: hidden;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+}

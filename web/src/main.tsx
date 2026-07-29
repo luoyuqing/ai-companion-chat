@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import "./settings.css";
 
 if (typeof window !== "undefined" && "serviceWorker" in navigator && !import.meta.env.DEV) {
   window.addEventListener("load", () => {

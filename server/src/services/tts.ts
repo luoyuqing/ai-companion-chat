@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { DigitalHumanConfig } from "../types";
+import { getTtsConfig, getLlmConfig } from "../core/config";
 
 function getOpenAiClient(): OpenAI | null {
-  const apiKey = process.env.OPENAI_TTS_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey = getLlmConfig().apiKey || process.env.OPENAI_TTS_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   return new OpenAI({
     apiKey,
-    baseURL: process.env.OPENAI_TTS_BASE_URL || process.env.OPENAI_BASE_URL
+    baseURL: getLlmConfig().baseUrl || process.env.OPENAI_TTS_BASE_URL || process.env.OPENAI_BASE_URL || undefined
   });
 }
 
@@ -41,14 +42,15 @@ async function synthesizeWithOpenAI(text: string, character: DigitalHumanConfig)
 }
 
 async function synthesizeWithMimo(text: string, character: DigitalHumanConfig): Promise<string | undefined> {
-  const apiKey = process.env.MIMO_API_KEY;
+  const cfg = getTtsConfig();
+  const apiKey = cfg.apiKey || process.env.MIMO_API_KEY;
   if (!apiKey) {
     return undefined;
   }
 
-  const baseURL = process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1";
+  const baseURL = cfg.baseUrl || process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1";
   const profile = character.voiceProfile || { provider: "mimo", voice: "mimo_default" };
-  const audioModel = profile.audioModel || process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts";
+  const audioModel = profile.audioModel || cfg.model || process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts";
   const format = "mp3";
   const defaultStylePrompt = "请用自然、温柔、贴合语境的语气朗读下面的内容，保持中文口语节奏。";
 
@@ -168,7 +170,7 @@ export async function synthesizeSpeech(
   text: string,
   character: DigitalHumanConfig
 ): Promise<string | undefined> {
-  const provider = process.env.TTS_PROVIDER || character.voiceProfile.provider || "openai";
+  const provider = process.env.TTS_PROVIDER || character.voiceProfile?.provider || getTtsConfig().provider || "openai";
   if (provider === "mimo") {
     try {
       return await synthesizeWithMimo(text, character);

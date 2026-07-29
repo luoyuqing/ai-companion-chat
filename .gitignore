@@ -4,5 +4,7 @@ dist
 build
 .env
 .env.local
+# 含 API Key 的系统配置文件（运行时生成，绝不入库）
+server/src/data/system-config.json
 .turbo
 pnpm-lock.yaml

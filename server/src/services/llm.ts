@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { ChatMessage, Emotion, DigitalHumanConfig, SessionContext, RelationshipMode } from "../types";
+import { getLlmConfig } from "../core/config";
 
 const unrestricted = String(process.env.DG_UNRESTRICTED_CHAT || "true").toLowerCase() !== "false";
 
@@ -273,12 +274,17 @@ function buildFallbackReply(
 }
 
 function getOpenAiClient(): OpenAI | null {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const cfg = getLlmConfig();
+  const apiKey = cfg.apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
   return new OpenAI({
     apiKey,
-    baseURL: process.env.OPENAI_BASE_URL
+    baseURL: cfg.baseUrl || process.env.OPENAI_BASE_URL || undefined
   });
+}
+
+function resolveLlmModel(): string {
+  return getLlmConfig().model || process.env.OPENAI_MODEL || "gpt-4o-mini";
 }
 
 function resolveAffinityText(level: SessionContext["relationshipAffinity"]): string {
@@ -381,7 +387,7 @@ export async function askAssistant(
   overrideMode?: RelationshipMode
 ): Promise<{ text: string; emotion: Emotion }> {
   const sceneHint = extractSceneHint(history);
-  if (!process.env.OPENAI_API_KEY) {
+  if (!getLlmConfig().apiKey && !process.env.OPENAI_API_KEY) {
     const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
     const text = buildFallbackReply(style, inferEmotionFromModel(userText), userText, sessionContext, sceneHint);
     return { text, emotion: inferEmotionFromModel(text) };
@@ -394,7 +400,7 @@ export async function askAssistant(
   }
 
   const response = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+    model: resolveLlmModel(),
     temperature: 0.9,
     stream: true,
     messages: [
@@ -434,7 +440,7 @@ export async function streamAssistant(
   overrideMode?: RelationshipMode
 ): Promise<{ text: string; emotion: Emotion }> {
   const sceneHint = extractSceneHint(history);
-  if (!process.env.OPENAI_API_KEY) {
+  if (!getLlmConfig().apiKey && !process.env.OPENAI_API_KEY) {
     const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
     const text = buildFallbackReply(style, inferEmotionFromModel(userText), userText, sessionContext, sceneHint);
     let previousEmotion: Emotion = "neutral";
@@ -473,7 +479,7 @@ export async function streamAssistant(
   }
 
   const response = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+    model: resolveLlmModel(),
     temperature: 0.9,
     stream: true,
     messages: [
@@ -592,7 +598,7 @@ export async function summarizeConversation(
 
   try {
     const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+      model: resolveLlmModel(),
       temperature: 0.3,
       stream: false,
       messages: [

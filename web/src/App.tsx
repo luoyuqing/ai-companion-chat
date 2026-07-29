@@ -1,10 +1,11 @@
-import { ArrowRight, AppWindow, Camera, MessageCircle, Smartphone, Sparkles } from "lucide-react";
+import { ArrowRight, AppWindow, Camera, MessageCircle, Settings, Smartphone, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
+import { SettingsPage } from "./components/SettingsPage";
 import { DigitalHuman, deleteDigitalHuman, fetchHumans } from "./services/api";
 
 
-type ViewMode = "landing" | "chat";
+type ViewMode = "landing" | "chat" | "settings";
 type DeferredInstallPrompt = {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
@@ -250,6 +251,9 @@ export default function App() {
           <p>今晚，也有人认真听你说话。</p>
         </div>
         <div className="chat-top-actions">
+          <button type="button" className="ghost-btn" onClick={() => setViewMode("settings")}>
+            <Settings size={16} /> 系统设置
+          </button>
           <button type="button" className="ghost-btn" onClick={backLanding}>
             <AppWindow size={16} /> 返回产品页
           </button>
@@ -276,6 +280,10 @@ export default function App() {
         />
       )}
     </section>
+  );
+
+  const settingsContent = (
+    <SettingsPage onBack={() => setViewMode("chat")} />
   );
 
   const landingContent = (
@@ -328,5 +336,9 @@ export default function App() {
     </section>
   );
 
-  return <main className="container">{viewMode === "landing" ? landingContent : chatContent}</main>;
+  return (
+    <main className="container">
+      {viewMode === "landing" ? landingContent : viewMode === "settings" ? settingsContent : chatContent}
+    </main>
+  );
 }
