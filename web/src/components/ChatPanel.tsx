@@ -845,6 +845,7 @@ interface NewCharacterForm {
   avatarVideoProfile: string;
   personalityTagline: string;
   relationshipMode: (typeof relationshipModes)[number];
+  telegramBotToken: string;
 }
 
 interface ApiHistoryMessage {
@@ -1091,6 +1092,7 @@ export function ChatPanel({
     avatarType: "image",
     avatarVideoProfile: "{}",
     personalityTagline: "",
+    telegramBotToken: "",
     relationshipMode: "sweet"
   });
   const [editForm, setEditForm] = useState({
@@ -1105,7 +1107,8 @@ export function ChatPanel({
     voiceCloneSample: "",
     defaultMood: "neutral" as (typeof moods)[number],
     relationshipMode: "sweet" as (typeof relationshipModes)[number],
-    personalityTagline: ""
+    personalityTagline: "",
+    telegramBotToken: ""
   });
   const [isEditSaving, setIsEditSaving] = useState(false);
   const [editStatus, setEditStatus] = useState("");
@@ -1151,7 +1154,9 @@ export function ChatPanel({
       relationshipMode: relationshipModes.includes((activeCharacter.relationshipMode || "sweet") as (typeof relationshipModes)[number])
         ? (activeCharacter.relationshipMode as (typeof relationshipModes)[number])
         : "sweet",
-      personalityTagline: activeCharacter.personalityTagline || ""
+      personalityTagline: activeCharacter.personalityTagline || "",
+      // telegramBotToken 为敏感凭证，后端不在列表中返回明文，故编辑时留空表示不修改现有 token，填写则更新
+      telegramBotToken: ""
     });
     setEditStatus("");
   }, [activeCharacter?.id]);
@@ -1831,7 +1836,10 @@ export function ChatPanel({
         voiceCloneSample: editForm.audioModel === "mimo-v2.5-tts-voiceclone" ? editForm.voiceCloneSample : undefined,
         defaultMood: editForm.defaultMood,
         relationshipMode: editForm.relationshipMode,
-        personalityTagline: editForm.personalityTagline.trim()
+        personalityTagline: editForm.personalityTagline.trim(),
+        ...(editForm.telegramBotToken.trim()
+          ? { telegramBotToken: editForm.telegramBotToken.trim() }
+          : {})
       });
       onUpdate(human);
       setEditStatus("已保存 ✓");
@@ -1930,6 +1938,7 @@ export function ChatPanel({
       defaultMood: form.defaultMood,
       personalityTagline: form.personalityTagline.trim(),
       relationshipMode: form.relationshipMode,
+      ...(form.telegramBotToken.trim() ? { telegramBotToken: form.telegramBotToken.trim() } : {}),
       ...(emotionProfile ? { emotionProfile } : {}),
       ...(avatarVideoProfile ? { avatarVideoProfile } : {})
     };
@@ -2286,6 +2295,18 @@ export function ChatPanel({
               />
             </label>
 
+            <label className="field">
+              <span className="field-label">Telegram 机器人 Token（可选）</span>
+              <input
+                type="password"
+                value={editForm.telegramBotToken}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, telegramBotToken: e.target.value }))}
+                placeholder="配置后该数字人将以独立机器人运行；留空则不修改"
+                autoComplete="off"
+              />
+              <small className="field-hint">绑定专属 TG 机器人（一角色一机器人）。仅主人可用，记忆按角色隔离。</small>
+            </label>
+
             {editStatus ? <small className="field-hint">{editStatus}</small> : null}
             <button type="submit" disabled={isEditSaving || isAvatarUploading}>
               {isEditSaving ? "保存中..." : "保存修改"}
@@ -2480,6 +2501,18 @@ export function ChatPanel({
                 onChange={(e) => setForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
                 placeholder="例如：轻松撒娇，但不越界"
               />
+            </label>
+
+            <label className="field">
+              <span className="field-label">Telegram 机器人 Token（可选）</span>
+              <input
+                type="password"
+                value={form.telegramBotToken}
+                onChange={(e) => setForm((prev) => ({ ...prev, telegramBotToken: e.target.value }))}
+                placeholder="配置后该数字人将以独立机器人运行；留空则不启用"
+                autoComplete="off"
+              />
+              <small className="field-hint">绑定专属 TG 机器人（一角色一机器人）。仅主人可用，记忆按角色隔离。</small>
             </label>
 
             <button type="submit" disabled={isModelUploading}>

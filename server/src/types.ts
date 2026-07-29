@@ -46,6 +46,9 @@ export interface DigitalHumanConfig {
     voiceCloneSample?: string;
   };
   defaultMood: Emotion;
+  // 专属 Telegram 机器人 token：配置后该数字人会以独立 bot 身份运行（一角色一机器人）。
+  // 注意：此字段为敏感凭证，后端在返回给前端的角色列表中会主动剥离，编辑时留空表示不修改。
+  telegramBotToken?: string;
 }
 
 export interface ChatRequestBody {

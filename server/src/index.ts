@@ -63,7 +63,9 @@ app.use(express.json({ limit: "30mb" }));
 
 app.get("/api/digital-humans", async (_req, res) => {
   const humans = await getCharacters();
-  res.json({ humans });
+  // 剥离敏感凭证：telegramBotToken 绝不返回给前端，避免泄露
+  const safe = humans.map(({ telegramBotToken, ...rest }) => rest);
+  res.json({ humans: safe });
 });
 
 app.post("/api/models/upload", async (req, res) => {
@@ -145,7 +147,8 @@ app.post("/api/digital-humans", async (req, res) => {
       avatarType,
       avatarVideoProfile,
       personalityTagline,
-      relationshipMode
+      relationshipMode,
+      telegramBotToken
     } = req.body as {
       name?: string;
       description?: string;
@@ -164,6 +167,7 @@ app.post("/api/digital-humans", async (req, res) => {
       avatarVideoProfile?: EmotionProfile;
       personalityTagline?: string;
       relationshipMode?: DigitalHumanConfig["relationshipMode"];
+      telegramBotToken?: string;
     };
 
     if (!name || !description || !avatarUrl || !voice) {
@@ -193,7 +197,8 @@ app.post("/api/digital-humans", async (req, res) => {
         voiceCloneSample: voiceCloneSample?.trim() || undefined
       },
       relationshipMode: ensureRelationshipMode(relationshipMode),
-      defaultMood: ensureSupportedMood(defaultMood)
+      defaultMood: ensureSupportedMood(defaultMood),
+      telegramBotToken: telegramBotToken?.trim() || undefined
     };
     customs.push(created);
     await writeCustomHumans(customs);
@@ -221,6 +226,11 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
     if (typeof body.personalityTagline === "string") patch.personalityTagline = body.personalityTagline.trim() || undefined;
     if (body.defaultMood !== undefined) patch.defaultMood = ensureSupportedMood(body.defaultMood as string);
     if (body.relationshipMode !== undefined) patch.relationshipMode = ensureRelationshipMode(body.relationshipMode);
+    // telegramBotToken：提供非空串则更新专属 bot；提供空串则清除（关闭专属 bot）
+    if (typeof body.telegramBotToken === "string") {
+      const t = body.telegramBotToken.trim();
+      patch.telegramBotToken = t ? t : undefined;
+    }
     if (body.avatarType !== undefined) patch.avatarType = normalizeAvatarType(body.avatarType);
 
     const voice = typeof body.voice === "string" ? body.voice.trim() : "";
@@ -641,10 +651,30 @@ if (HOST) {
   });
 }
 
-// Telegram 机器人：配置了 TELEGRAM_BOT_TOKEN 才启动，否则不影响网页端
+// Telegram 机器人：单进程多实例。
+// 1) 若配置了 TELEGRAM_BOT_TOKEN，启动一个「通用入口」bot（支持 /select 切换角色）；
+// 2) 遍历所有配置了 telegramBotToken 的数字人，各启动一个独立专属 bot（一角色一机器人），
+//    角色间记忆按 characterId 隔离，互不影响。
 const tgToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
-if (tgToken) {
-  startTelegramBot(tgToken).catch((err) => {
-    console.error("Telegram bot failed to start:", err);
-  });
+function launchTelegramBots(): void {
+  if (tgToken) {
+    startTelegramBot(tgToken).catch((err) => {
+      console.error("通用入口 Telegram bot 启动失败:", err);
+    });
+  }
+  getCharacters()
+    .then((characters) => {
+      let launched = 0;
+      for (const c of characters) {
+        if (c.telegramBotToken && c.telegramBotToken.trim()) {
+          startTelegramBot(c.telegramBotToken.trim(), c.id).catch((err) => {
+            console.error(`数字人「${c.name}」专属 bot 启动失败:`, err);
+          });
+          launched++;
+        }
+      }
+      if (launched > 0) console.log(`已启动 ${launched} 个专属数字人 bot`);
+    })
+    .catch((err) => console.error("加载数字人失败，无法启动专属 bot:", err));
 }
+launchTelegramBots();

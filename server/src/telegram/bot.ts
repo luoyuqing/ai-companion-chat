@@ -40,9 +40,6 @@ const execFileAsync = promisify(execFile);
 // （Telegram 文件下载 api.telegram.org/file/... 因此超时）。改为 ipv4first 后走通。
 dns.setDefaultResultOrder("ipv4first");
 
-// 模块级保存 bot token，供下载 Telegram 文件时拼接 file URL 使用
-let BOT_TOKEN = "";
-
 // MiMo mimo-v2.5-tts 全部可选音色（与网页端下拉保持一致）
 const MIMO_VOICES = ["mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"];
 const RELATIONSHIP_MODES = ["flirty", "playful", "mature", "sweet"];
@@ -74,22 +71,8 @@ interface BotSessionData {
 type BotContext = Context & SessionFlavor<BotSessionData>;
 
 // ---------- helpers ----------
-// 会话 ID 方案：网页端与主人共用 mem:<characterId>（按数字人隔离的长期记忆），
-// 其他授权 TG 用户各自独立存储 tg:<chatId>:<characterId>，不污染主人记忆。
-function chatSessionId(ctx: BotContext): string {
-  const charId = ctx.session.currentCharacterId || "default";
-  const ownerId = loadOwner();
-  if (ownerId != null && ctx.from?.id === ownerId) {
-    return `mem:${charId}`;
-  }
-  const chatId = ctx.chat?.id ?? ctx.from?.id ?? 0;
-  return `tg-${chatId}-${charId}`;
-}
-
-async function currentCharacter(ctx: BotContext): Promise<DigitalHumanConfig | null> {
-  const characters = await getCharacters();
-  return resolveCharacter(characters, ctx.session.currentCharacterId);
-}
+// 说明：chatSessionId / currentCharacter / runChatWithContext 已移至 registerBot 内部，
+// 以便支持「一角色一机器人」的固定角色（fixedCharacterId）闭包，避免多实例共享全局变量冲突。
 
 // 在异步耗时操作期间持续发送「正在输入…」指示，让用户知道数字人正在准备回复
 async function withTyping<T>(ctx: BotContext, fn: () => Promise<T>): Promise<T> {
@@ -103,30 +86,6 @@ async function withTyping<T>(ctx: BotContext, fn: () => Promise<T>): Promise<T> 
   } finally {
     clearInterval(timer);
   }
-}
-
-async function runChatWithContext(
-  ctx: BotContext,
-  message: string,
-  sceneOverride?: "daily" | "date" | "comfort" | "flirty" | "bedtime"
-): Promise<ReturnType<typeof runChat>> {
-  const character = await currentCharacter(ctx);
-  if (!character) {
-    throw new Error("NO_CHARACTER");
-  }
-  return withTyping(ctx, () =>
-    runChat({
-      sessionId: chatSessionId(ctx),
-      message,
-      characterId: character.id,
-      relationshipMode: sceneOverride
-        ? (getSceneById(sceneOverride)?.relationshipMode ?? character.relationshipMode)
-        : undefined,
-      sceneId: sceneOverride || ctx.session.activeSceneId,
-      styleId: ctx.session.responseStyle,
-      adultVerified: ctx.session.adultVerified
-    })
-  );
 }
 
 function sceneLabel(id?: string): string {
@@ -180,11 +139,11 @@ async function listHumansKeyboard(ctx: BotContext): Promise<{ text: string; keyb
   return { text: `当前数字人列表：\n${lines.join("\n")}`, keyboard };
 }
 
-async function downloadToTemp(ctx: BotContext, fileId: string, ext: string): Promise<string> {
+async function downloadToTemp(ctx: BotContext, fileId: string, ext: string, botToken: string): Promise<string> {
   const file = await ctx.api.getFile(fileId);
   const filePath = file.file_path;
   if (!filePath) throw new Error("文件无可用路径");
-  const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+  const url = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
   const tmp = path.join(os.tmpdir(), `dg-tg-${Date.now()}-${Math.random().toString(16).slice(2)}.${ext}`);
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -203,8 +162,8 @@ async function downloadToTemp(ctx: BotContext, fileId: string, ext: string): Pro
   throw lastErr instanceof Error ? lastErr : new Error("下载 Telegram 文件失败");
 }
 
-async function saveAvatar(ctx: BotContext, fileId: string): Promise<string> {
-  const tmp = await downloadToTemp(ctx, fileId, "img");
+async function saveAvatar(ctx: BotContext, fileId: string, botToken: string): Promise<string> {
+  const tmp = await downloadToTemp(ctx, fileId, "img", botToken);
   try {
     const mime = "image/png"; // Telegram 头像统一为静态图
     const safeName = sanitizeAvatarFileName("tg-avatar.png", mime);
@@ -305,10 +264,53 @@ function styleKeyboard(selectedId?: string): InlineKeyboard {
 }
 
 // ---------- bot ----------
-export function registerBot(bot: Bot<BotContext>): void {
+export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharacterId?: string): void {
   bot.catch((err) => {
     console.error("Telegram bot error:", err);
   });
+
+  // 「一角色一机器人」模式：fixedCharacterId 非空时，本 bot 永久绑定该数字人，
+  // 跳过角色切换/管理命令，记忆按固定角色隔离（mem:<fixedId> / tg-<chatId>-<fixedId>）。
+  const fixedId = fixedCharacterId;
+
+  function chatSessionId(ctx: BotContext): string {
+    const charId = fixedId || ctx.session.currentCharacterId || "default";
+    const ownerId = loadOwner();
+    if (ownerId != null && ctx.from?.id === ownerId) {
+      return `mem:${charId}`;
+    }
+    const chatId = ctx.chat?.id ?? ctx.from?.id ?? 0;
+    return `tg-${chatId}-${charId}`;
+  }
+
+  async function currentCharacter(ctx: BotContext): Promise<DigitalHumanConfig | null> {
+    const characters = await getCharacters();
+    return resolveCharacter(characters, fixedId || ctx.session.currentCharacterId);
+  }
+
+  async function runChatWithContext(
+    ctx: BotContext,
+    message: string,
+    sceneOverride?: "daily" | "date" | "comfort" | "flirty" | "bedtime"
+  ): Promise<ReturnType<typeof runChat>> {
+    const character = await currentCharacter(ctx);
+    if (!character) {
+      throw new Error("NO_CHARACTER");
+    }
+    return withTyping(ctx, () =>
+      runChat({
+        sessionId: chatSessionId(ctx),
+        message,
+        characterId: character.id,
+        relationshipMode: sceneOverride
+          ? (getSceneById(sceneOverride)?.relationshipMode ?? character.relationshipMode)
+          : undefined,
+        sceneId: sceneOverride || ctx.session.activeSceneId,
+        styleId: ctx.session.responseStyle,
+        adultVerified: ctx.session.adultVerified
+      })
+    );
+  }
 
   bot.use(session({ initial: (): BotSessionData => ({ voiceEnabled: false }) }));
 
@@ -385,11 +387,19 @@ export function registerBot(bot: Bot<BotContext>): void {
   });
 
   bot.command("list", async (ctx) => {
+    if (fixedId) {
+      const c = await currentCharacter(ctx);
+      return ctx.reply(`本机器人是「${c?.name ?? "专属数字人"}」的专属助手，无需切换角色。`);
+    }
     const { text, keyboard } = await listHumansKeyboard(ctx);
     await ctx.reply(text, { reply_markup: keyboard });
   });
 
   bot.command("select", async (ctx) => {
+    if (fixedId) {
+      const c = await currentCharacter(ctx);
+      return ctx.reply(`本机器人是「${c?.name ?? "专属数字人"}」的专属助手，无需切换角色。`);
+    }
     const arg = ctx.match?.trim();
     const characters = await getCharacters();
     let target: DigitalHumanConfig | null = characters[0] ?? null;
@@ -514,12 +524,20 @@ export function registerBot(bot: Bot<BotContext>): void {
   });
 
   bot.command("new", async (ctx) => {
+    if (fixedId) {
+      const c = await currentCharacter(ctx);
+      return ctx.reply(`本机器人仅供「${c?.name ?? "专属数字人"}」使用，创建数字人请在网页端或通用机器人进行。`);
+    }
     ctx.session.create = {};
     ctx.session.createStep = "name";
     await ctx.reply("开始创建数字人。\n第一步：请发送她的【名字】（例如：林夕）。");
   });
 
   bot.command("edit", async (ctx) => {
+    if (fixedId) {
+      const c = await currentCharacter(ctx);
+      return ctx.reply(`本机器人仅供「${c?.name ?? "专属数字人"}」使用，编辑数字人请在网页端或通用机器人进行。`);
+    }
     const { text, keyboard } = await listHumansKeyboard(ctx);
     ctx.session.editId = undefined;
     ctx.session.editField = undefined;
@@ -527,6 +545,10 @@ export function registerBot(bot: Bot<BotContext>): void {
   });
 
   bot.command("delete", async (ctx) => {
+    if (fixedId) {
+      const c = await currentCharacter(ctx);
+      return ctx.reply(`本机器人仅供「${c?.name ?? "专属数字人"}」使用，删除数字人请在网页端或通用机器人进行。`);
+    }
     const arg = ctx.match?.trim();
     const characters = await getCharacters();
     let target = arg ? (characters.find((c) => c.id === arg) ?? characters[Number(arg) - 1]) : null;
@@ -833,14 +855,14 @@ export function registerBot(bot: Bot<BotContext>): void {
     const fileId = last.file_id;
     try {
       if (ctx.session.create && ctx.session.createStep === "avatar") {
-        const url = await saveAvatar(ctx, fileId);
+        const url = await saveAvatar(ctx, fileId, botToken);
         ctx.session.create.avatarUrl = url;
         ctx.session.createStep = "voice";
         await ctx.reply("头像已保存。请选择音色：", { reply_markup: voiceKeyboard() });
         return;
       }
       if (ctx.session.editId && ctx.session.editField === "avatarUrl") {
-        const url = await saveAvatar(ctx, fileId);
+        const url = await saveAvatar(ctx, fileId, botToken);
         await applyCharacterPatch(ctx.session.editId, { avatarUrl: url });
         ctx.session.editId = undefined;
         ctx.session.editField = undefined;
@@ -862,7 +884,7 @@ export function registerBot(bot: Bot<BotContext>): void {
     if (!doc) return;
     let tmp: string | undefined;
     try {
-      tmp = await downloadToTemp(ctx, doc.file_id, "json");
+      tmp = await downloadToTemp(ctx, doc.file_id, "json", botToken);
       const raw = await fs.readFile(tmp, "utf8");
       const parsed = JSON.parse(raw) as { history?: unknown; context?: unknown };
       if (!Array.isArray(parsed.history)) {
@@ -892,7 +914,7 @@ export function registerBot(bot: Bot<BotContext>): void {
     const fileId = ctx.message.voice.file_id;
     let oggPath: string | undefined;
     try {
-      oggPath = await downloadToTemp(ctx, fileId, "ogg");
+      oggPath = await downloadToTemp(ctx, fileId, "ogg", botToken);
       const { base64, mime } = await oggToWavBase64(oggPath);
       oggPath = undefined;
       const text = await transcribeSpeechAudio({ audioBase64: base64, mimeType: mime });
@@ -986,11 +1008,10 @@ export function registerBot(bot: Bot<BotContext>): void {
   });
 }
 
-export async function startTelegramBot(token: string): Promise<void> {
+export async function startTelegramBot(token: string, fixedCharacterId?: string): Promise<void> {
   if (!token) return;
-  BOT_TOKEN = token;
   const bot = new Bot<BotContext>(token);
-  registerBot(bot);
+  registerBot(bot, token, fixedCharacterId);
 
   const webhookUrl = process.env.TELEGRAM_WEBHOOK?.trim();
   if (webhookUrl) {

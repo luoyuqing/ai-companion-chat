@@ -110,6 +110,7 @@ export interface CreateHumanRequest {
   avatarVideoProfile?: EmotionProfile;
   personalityTagline?: string;
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
+  telegramBotToken?: string;
 }
 
 export type UpdateHumanRequest = Partial<CreateHumanRequest>;
