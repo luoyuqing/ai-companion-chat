@@ -47,46 +47,84 @@ async function synthesizeWithMimo(text: string, character: DigitalHumanConfig): 
   }
 
   const baseURL = process.env.MIMO_BASE_URL || "https://api.xiaomimimo.com/v1";
-  const model = process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts";
-  const voice = process.env.MIMO_TTS_VOICE || character.voiceProfile.voice || "冰糖";
+  const profile = character.voiceProfile || { provider: "mimo", voice: "mimo_default" };
+  const audioModel = profile.audioModel || process.env.MIMO_TTS_MODEL || "mimo-v2.5-tts";
   const format = "mp3";
+  const defaultStylePrompt = "请用自然、温柔、贴合语境的语气朗读下面的内容，保持中文口语节奏。";
 
-  const response = await fetch(`${baseURL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "api-key": apiKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "user",
-          content: "请用自然、温柔、贴合语境的语气朗读下面的内容，保持中文口语节奏。"
-        },
-        {
-          role: "assistant",
-          content: text
-        }
-      ],
-      audio: { format, voice }
-    })
+  let userContent = defaultStylePrompt;
+  let audio: Record<string, unknown> = { format };
+
+  if (audioModel === "mimo-v2.5-tts-voicedesign") {
+    const designPrompt = (profile.voiceDesignPrompt || "").trim();
+    userContent = designPrompt || "一位温柔自然的中文女声，语速适中，亲切有温度，像在轻声讲述。";
+    audio = { format };
+  } else if (audioModel === "mimo-v2.5-tts-voiceclone") {
+    const cloneSample = (profile.voiceCloneSample || "").trim();
+    if (!cloneSample) {
+      console.warn("voiceclone 模式未提供音频样本，回退到预置音色");
+      audio = { format, voice: profile.voiceId || profile.voice || "mimo_default" };
+    } else {
+      audio = { format, voice: cloneSample };
+    }
+    userContent = (profile.stylePrompt || "").trim() || defaultStylePrompt;
+  } else {
+    const voice = profile.voiceId || profile.voice || "mimo_default";
+    audio = { format, voice };
+    userContent = (profile.stylePrompt || "").trim() || defaultStylePrompt;
+  }
+
+  const requestBody = JSON.stringify({
+    model: audioModel,
+    messages: [
+      {
+        role: "user",
+        content: userContent
+      },
+      {
+        role: "assistant",
+        content: text
+      }
+    ],
+    audio
   });
 
-  if (!response.ok) {
-    const message = await response.text().catch(() => "mimo tts failed");
-    throw new Error(`MiMo TTS 调用失败: ${message}`);
-  }
+  const maxAttempts = 3;
+  let lastError: Error = new Error("MiMo TTS 调用失败");
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(`${baseURL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "api-key": apiKey,
+          "Content-Type": "application/json"
+        },
+        body: requestBody
+      });
 
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { audio?: { data?: string } } }>;
-  };
-  const b64 = data?.choices?.[0]?.message?.audio?.data;
-  if (!b64) {
-    throw new Error("MiMo TTS 未返回音频数据");
-  }
+      if (!response.ok) {
+        const message = await response.text().catch(() => "mimo tts failed");
+        throw new Error(`MiMo TTS 调用失败: ${message}`);
+      }
 
-  return await writeAudioBuffer(Buffer.from(b64, "base64"));
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { audio?: { data?: string } } }>;
+      };
+      const b64 = data?.choices?.[0]?.message?.audio?.data;
+      if (!b64) {
+        throw new Error("MiMo TTS 未返回音频数据");
+      }
+
+      return await writeAudioBuffer(Buffer.from(b64, "base64"));
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxAttempts) {
+        console.warn(`MiMo TTS 第${attempt}次调用失败（${lastError.message}），1.5秒后重试...`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
+  }
+  throw lastError;
 }
 
 function escapeSsml(value: string): string {

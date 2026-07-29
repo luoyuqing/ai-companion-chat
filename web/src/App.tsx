@@ -1,5 +1,5 @@
 import { ArrowRight, AppWindow, Camera, MessageCircle, Smartphone, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { DigitalHuman, deleteDigitalHuman, fetchHumans } from "./services/api";
 
@@ -37,15 +37,18 @@ const FEATURE_CARDS = [
 
 export default function App() {
   const [characters, setCharacters] = useState<Array<DigitalHuman>>([]);
+  const [sessionId, setSessionId] = useState(() => {
+    if (typeof window === "undefined") return "session-browser";
+    const existing = window.localStorage.getItem("dg-session-id");
+    if (existing) return existing;
+    const generated = `session-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem("dg-session-id", generated);
+    return generated;
+  });
   const [selectedCharacterId, setSelectedCharacterId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(CHARACTER_STORAGE_KEY)?.trim() || "";
   });
-  // 会话 ID 与机器人共用：按数字人派生 mem:<characterId>，保证网页端与 TG 长期记忆一致。
-  const sessionId = useMemo(
-    () => `mem:${selectedCharacterId || "default"}`,
-    [selectedCharacterId]
-  );
   const [error, setError] = useState<string | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<DeferredInstallPrompt | null>(null);
   const [installed, setInstalled] = useState(false);
@@ -150,7 +153,10 @@ export default function App() {
   };
 
   const resetSession = () => {
-    // 记忆由后端按数字人统一存储（mem:<characterId>），清空由 ChatPanel 调用 clearSessionHistory 删除共享文件完成。
+    if (typeof window === "undefined") return;
+    const newSessionId = `session-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
+    window.localStorage.setItem("dg-session-id", newSessionId);
+    setSessionId(newSessionId);
   };
 
   useEffect(() => {

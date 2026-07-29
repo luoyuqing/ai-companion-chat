@@ -1679,47 +1679,6 @@ select {
   display: none;
 }
 
-.memory-summary-panel {
-  margin: 8px 0 0;
-  border: 1px solid #302d2a;
-  border-radius: 8px;
-  background: #141312;
-  overflow: hidden;
-}
-
-.memory-summary-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: transparent;
-  border: 0;
-  color: #c9bfb8;
-  font-size: 13px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.memory-summary-toggle:hover {
-  background: #1d1b1a;
-  color: #fff8f4;
-}
-
-.memory-summary-text {
-  margin: 0;
-  padding: 10px 12px 14px;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #b6aca4;
-  font-size: 12.5px;
-  line-height: 1.6;
-  border-top: 1px solid #262322;
-  scrollbar-color: #4a413c transparent;
-}
-
 .chat-list {
   height: clamp(380px, 48vh, 590px);
   min-height: 360px;

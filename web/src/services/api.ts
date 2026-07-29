@@ -7,6 +7,18 @@ export type Emotion = "happy" | "sad" | "surprise" | "wink" | "neutral" | "angry
 export type EmotionProfile = Partial<Record<Emotion, string>>;
 export type RelationshipMode = "sweet" | "flirty" | "playful" | "mature";
 
+export type MimoAudioModel = "mimo-v2.5-tts" | "mimo-v2.5-tts-voicedesign" | "mimo-v2.5-tts-voiceclone";
+
+export interface VoiceProfile {
+  provider: "openai" | "azure" | "local" | "mimo";
+  voice: string;
+  audioModel?: MimoAudioModel;
+  voiceId?: string;
+  stylePrompt?: string;
+  voiceDesignPrompt?: string;
+  voiceCloneSample?: string;
+}
+
 export interface ChatContext {
   relationshipAffinity: "new" | "warm" | "close" | "intimate";
   activeRelationshipMode?: RelationshipMode;
@@ -76,7 +88,7 @@ export interface DigitalHuman {
   avatarVideoProfile?: EmotionProfile;
   personalityTagline?: string;
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
-  voiceProfile: { provider: "openai" | "azure" | "local" | "mimo"; voice: string };
+  voiceProfile: VoiceProfile;
   defaultMood: Emotion;
 }
 
@@ -88,6 +100,11 @@ export interface CreateHumanRequest {
   avatarType?: "image" | "video";
   voiceProvider?: "openai" | "azure" | "local" | "mimo";
   voice: string;
+  audioModel?: MimoAudioModel;
+  voiceId?: string;
+  stylePrompt?: string;
+  voiceDesignPrompt?: string;
+  voiceCloneSample?: string;
   defaultMood?: Emotion;
   emotionProfile?: EmotionProfile;
   avatarVideoProfile?: EmotionProfile;
@@ -786,6 +803,21 @@ export async function sendMessage(payload: ChatRequest): Promise<ChatResponse> {
   }
 }
 
+export async function synthesizeTts(params: {
+  text: string;
+  characterId?: string;
+}): Promise<{ audioUrl?: string }> {
+  const res = await fetch(`${API_BASE}/api/tts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params)
+  });
+  if (!res.ok) {
+    throw new Error("语音合成失败");
+  }
+  return res.json();
+}
+
 export async function transcribeSpeech(params: {
   audioBase64: string;
   mimeType?: string;
@@ -824,113 +856,6 @@ export async function clearSessionHistory(sessionId: string): Promise<void> {
     // Static Pages mode has no session API.
   }
   clearLocalContext(sessionId);
-}
-
-/**
- * 拉取后端按数字人存储的长期记忆（与 Telegram 机器人共享），用于在网页端回显历史对话。
- */
-export async function fetchSessionHistory(
-  sessionId: string
-): Promise<Array<{ role: "user" | "assistant" | "system"; content: string }> | null> {
-  if (!sessionId) return null;
-  try {
-    const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) return null;
-    const record = (await res.json()) as { history?: Array<{ role: string; content: string }> };
-    return (record.history ?? [])
-      .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
-  } catch {
-    return null;
-  }
-}
-
-export interface SessionMeta {
-  summaryMode: boolean;
-  memoryFile?: string;
-  turns: number;
-}
-
-/** 读取会话的总结模式状态与当前记忆档案（用于网页端开关展示）。 */
-export async function fetchSessionMeta(sessionId: string): Promise<SessionMeta | null> {
-  if (!sessionId) return null;
-  try {
-    const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) return null;
-    const record = (await res.json()) as { summaryMode?: boolean; memoryFile?: string; history?: unknown[] };
-    return {
-      summaryMode: Boolean(record.summaryMode),
-      memoryFile: record.memoryFile,
-      turns: Array.isArray(record.history) ? record.history.length : 0
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** 开关总结模式；开启时后端会立即基于历史生成记忆档案。 */
-export async function setSummaryMode(
-  sessionId: string,
-  enabled: boolean,
-  characterId?: string
-): Promise<SessionMeta> {
-  const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}/summary`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled, characterId })
-  });
-  if (!res.ok) {
-    const message = await res.text().catch(() => "设置失败");
-    throw new Error(message || "设置总结模式失败");
-  }
-  const data = (await res.json()) as { summaryMode: boolean; memoryFile?: string; turns: number };
-  return { summaryMode: Boolean(data.summaryMode), memoryFile: data.memoryFile, turns: data.turns };
-}
-
-/**
- * 备份当前数字人的服务器记忆为 JSON 文件（跨设备/跨服务器迁移用）。
- */
-export async function exportSessionHistory(sessionId: string): Promise<void> {
-  if (!sessionId) throw new Error("会话 ID 为空");
-  const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`);
-  if (!res.ok) throw new Error("导出记忆失败");
-  const record = await res.json();
-  const blob = new Blob([JSON.stringify(record, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `dg-memory-${sessionId.replace(/[^a-zA-Z0-9._-]/g, "-")}.json`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-}
-
-/**
- * 从 JSON 文件恢复一份服务器记忆（覆盖写回该数字人的共享会话）。
- */
-export async function importSessionHistory(sessionId: string, file: File): Promise<{ turns: number; sessionId: string }> {
-  if (!sessionId) throw new Error("会话 ID 为空");
-  const raw = await file.text();
-  let parsed: { history?: unknown; context?: unknown };
-  try {
-    parsed = JSON.parse(raw) as { history?: unknown; context?: unknown };
-  } catch {
-    throw new Error("文件不是合法的 JSON");
-  }
-  if (!Array.isArray(parsed.history)) {
-    throw new Error("文件格式不正确：缺少 history 数组");
-  }
-  const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}/import`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ history: parsed.history, context: parsed.context })
-  });
-  if (!res.ok) {
-    const message = await res.text().catch(() => "导入记忆失败");
-    throw new Error(message || "导入记忆失败");
-  }
-  return res.json();
 }
 
 function parseSseText(raw: string): string {

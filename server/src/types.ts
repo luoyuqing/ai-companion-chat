@@ -13,6 +13,8 @@ export type RelationshipAffinity = "new" | "warm" | "close" | "intimate";
 
 export type RelationshipMode = "sweet" | "flirty" | "playful" | "mature";
 
+export type MimoAudioModel = "mimo-v2.5-tts" | "mimo-v2.5-tts-voicedesign" | "mimo-v2.5-tts-voiceclone";
+
 export interface SessionContext {
   relationshipAffinity: RelationshipAffinity;
   summary: string;
@@ -37,6 +39,11 @@ export interface DigitalHumanConfig {
   voiceProfile: {
     provider: "openai" | "azure" | "local" | "mimo";
     voice: string;
+    audioModel?: MimoAudioModel;
+    voiceId?: string;
+    stylePrompt?: string;
+    voiceDesignPrompt?: string;
+    voiceCloneSample?: string;
   };
   defaultMood: Emotion;
 }

@@ -4,7 +4,6 @@ import {
   Brain,
   Coffee,
   Download,
-  FileText,
   Hand,
   Heart,
   Image as ImageIcon,
@@ -13,7 +12,6 @@ import {
   MicOff,
   Moon,
   Pencil,
-  RotateCcw,
   Save,
   Send,
   Settings2,
@@ -32,19 +30,16 @@ import {
   DigitalHuman,
   Emotion,
   EmotionProfile,
+  MimoAudioModel,
   Message,
   StreamDoneResponse,
   clearSessionHistory,
   createDigitalHuman,
-  exportSessionHistory,
-  fetchSessionMeta,
-  importSessionHistory,
   isLocalCompanionMode,
-  fetchSessionHistory,
-  setSummaryMode,
   resolveMediaUrl,
   sendMessage,
   sendMessageStream,
+  synthesizeTts,
   transcribeSpeech,
   updateDigitalHuman,
   uploadAvatarFile,
@@ -56,13 +51,10 @@ const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/")
 const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/lina-original.jpg`;
 const assetPlaceholderBase = `${PUBLIC_ASSET_BASE}assets`;
 const AVATAR_MODE_STORAGE_KEY = "dg-avatar-render-mode";
-const CHAT_STATE_STORAGE_PREFIX = "dg-chat-state-v1";
+const CHAT_STATE_STORAGE_PREFIX = "dg-chat-state-v2";
 const LOCAL_HUMANS_STORAGE_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_STORAGE_KEY = "dg-local-chat-context-v1";
-// 长期记忆按数字人隔离存储：dg-user-memory-v1:<characterId>
-// 旧版本使用全局键 dg-user-memory-v1（不区分数字人），首次切换时自动迁移到新键
 const USER_MEMORY_STORAGE_KEY = "dg-user-memory-v1";
-const userMemoryKey = (characterId?: string) => `dg-user-memory-v1:${characterId || "default"}`;
 const SESSION_STORAGE_KEY = "dg-session-id";
 const SELECTED_CHARACTER_STORAGE_KEY = "dg-selected-character-id";
 const ACTIVE_SCENE_STORAGE_KEY = "dg-active-companion-scene-v1";
@@ -82,15 +74,15 @@ const voiceStyleOptions: Array<{ id: VoiceStyle; label: string }> = [
 
 // MiMo mimo-v2.5-tts 官方可选音色（来源：https://mimo.mi.com/docs/zh-CN/api/audio/tts）
 const MIMO_VOICE_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: "冰糖", label: "冰糖（推荐 · 温柔女声）" },
-  { id: "mimo_default", label: "mimo_default（默认通用女声）" },
-  { id: "茉莉", label: "茉莉" },
-  { id: "苏打", label: "苏打" },
-  { id: "白桦", label: "白桦" },
-  { id: "Mia", label: "Mia" },
-  { id: "Chloe", label: "Chloe" },
-  { id: "Milo", label: "Milo" },
-  { id: "Dean", label: "Dean" }
+  { id: "mimo_default", label: "MiMo-默认" },
+  { id: "冰糖", label: "冰糖" },
+  { id: "茉莉", label: "茉莉" }
+];
+
+const MIMO_AUDIO_MODELS: Array<{ id: MimoAudioModel; label: string; desc: string }> = [
+  { id: "mimo-v2.5-tts", label: "预置精品音色", desc: "使用内置精品音色合成语音" },
+  { id: "mimo-v2.5-tts-voicedesign", label: "文本设计音色", desc: "用一段文字描述生成专属音色" },
+  { id: "mimo-v2.5-tts-voiceclone", label: "音频复刻音色", desc: "上传音频样本复刻任意声音" }
 ];
 
 type CompanionSceneId = "daily" | "date" | "comfort" | "flirty" | "bedtime";
@@ -118,6 +110,7 @@ interface CompanionInteraction {
 interface Bubble {
   role: Message["role"];
   content: string;
+  audioUrl?: string;
 }
 
 interface BrowserSpeechRecognitionResult {
@@ -163,6 +156,7 @@ interface LocalArchivePayload {
   avatarRenderMode?: "2d" | "3d";
   activeSceneId?: CompanionSceneId;
   userMemory?: UserMemory;
+  userMemories?: Record<string, UserMemory>;
   localHumans: DigitalHuman[];
   localContexts: Record<string, ChatContext>;
   chatStates: Array<{ key: string; value: unknown }>;
@@ -456,31 +450,37 @@ function normalizeUserMemory(raw: unknown): UserMemory {
   };
 }
 
-function readStoredUserMemory(characterId?: string): UserMemory {
-  if (typeof window === "undefined") return { ...emptyUserMemory };
-  const key = userMemoryKey(characterId);
-  const raw = readLocalStorageJson<unknown>(key, null);
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return normalizeUserMemory(raw);
-  }
-  // 旧版本兼容：全局键 dg-user-memory-v1 不区分数字人，首次读取时迁移到当前数字人专属键
-  const legacy = readLocalStorageJson<unknown>(USER_MEMORY_STORAGE_KEY, null);
-  if (legacy && typeof legacy === "object" && !Array.isArray(legacy)) {
-    const normalized = normalizeUserMemory(legacy);
-    window.localStorage.setItem(key, JSON.stringify(normalized));
-    window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
-    return normalized;
-  }
-  return { ...emptyUserMemory };
+function userMemoryStorageKey(characterId: string): string {
+  return `${USER_MEMORY_STORAGE_KEY}:${encodeURIComponent(characterId || "default")}`;
 }
 
-function writeStoredUserMemory(memory: UserMemory, characterId?: string): UserMemory {
+function readStoredUserMemory(characterId: string): UserMemory {
+  if (typeof window === "undefined") return { ...emptyUserMemory };
+  return normalizeUserMemory(readLocalStorageJson<unknown>(userMemoryStorageKey(characterId), emptyUserMemory));
+}
+
+function readAllStoredUserMemories(): Record<string, UserMemory> {
+  const result: Record<string, UserMemory> = {};
+  if (typeof window === "undefined") return result;
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith(`${USER_MEMORY_STORAGE_KEY}:`)) continue;
+    const characterId = decodeURIComponent(key.slice(USER_MEMORY_STORAGE_KEY.length + 1));
+    const memory = normalizeUserMemory(readLocalStorageJson<unknown>(key, emptyUserMemory));
+    if (hasUserMemory(memory)) result[characterId] = memory;
+  }
+  return result;
+}
+
+function writeStoredUserMemory(characterId: string, memory: UserMemory): UserMemory {
   const normalized = normalizeUserMemory({
     ...memory,
     updatedAt: new Date().toISOString()
   });
   if (typeof window !== "undefined") {
-    window.localStorage.setItem(userMemoryKey(characterId), JSON.stringify(normalized));
+    window.localStorage.setItem(userMemoryStorageKey(characterId), JSON.stringify(normalized));
+    // 移除旧版全局共享记忆，避免继续串号
+    window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
   }
   return normalized;
 }
@@ -756,7 +756,7 @@ function buildLocalArchive(
     selectedCharacterId,
     avatarRenderMode,
     activeSceneId,
-    userMemory: readStoredUserMemory(selectedCharacterId),
+    userMemories: readAllStoredUserMemories(),
     localHumans: normalizeImportedHumans(readLocalStorageJson<unknown>(LOCAL_HUMANS_STORAGE_KEY, [])),
     localContexts: normalizeImportedContexts(readLocalStorageJson<unknown>(LOCAL_CONTEXT_STORAGE_KEY, {})),
     chatStates
@@ -808,11 +808,20 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
     window.localStorage.setItem(ACTIVE_SCENE_STORAGE_KEY, archive.activeSceneId);
   }
 
-  const importedMemory = normalizeUserMemory(archive.userMemory);
-  const hasMemory = hasUserMemory(importedMemory);
-  if (hasMemory) {
-    // 恢复到归档时所针对的数字人专属记忆键（而非全局键），保证不同数字人记忆隔离
-    window.localStorage.setItem(userMemoryKey(archive.selectedCharacterId), JSON.stringify(importedMemory));
+  let hasMemory = false;
+  if (archive.userMemories && typeof archive.userMemories === "object") {
+    Object.entries(archive.userMemories).forEach(([characterId, memory]) => {
+      const normalized = normalizeUserMemory(memory);
+      if (!hasUserMemory(normalized)) return;
+      window.localStorage.setItem(userMemoryStorageKey(characterId), JSON.stringify(normalized));
+      hasMemory = true;
+    });
+  }
+  const legacyMemory = normalizeUserMemory(archive.userMemory);
+  if (hasUserMemory(legacyMemory)) {
+    const legacyCharacterId = String(archive.selectedCharacterId || "default");
+    window.localStorage.setItem(userMemoryStorageKey(legacyCharacterId), JSON.stringify(legacyMemory));
+    hasMemory = true;
   }
 
   return { humans: importedHumans.length, chats: importedChatCount, hasMemory };
@@ -825,6 +834,11 @@ interface NewCharacterForm {
   modelUrl: string;
   voiceProvider: "openai" | "azure" | "local" | "mimo";
   voice: string;
+  audioModel: MimoAudioModel;
+  voiceId: string;
+  stylePrompt: string;
+  voiceDesignPrompt: string;
+  voiceCloneSample: string;
   defaultMood: (typeof moods)[number];
   emotionProfile: string;
   avatarType: "image" | "video";
@@ -1058,7 +1072,7 @@ export function ChatPanel({
   });
   const [avatarInteraction, setAvatarInteraction] = useState<CompanionInteractionId | null>(null);
   const [activeSceneId, setActiveSceneId] = useState<CompanionSceneId>(() => readStoredSceneId());
-  const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory(selectedCharacterId));
+  const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory(initialCharacter?.id || ""));
   const [memoryStatus, setMemoryStatus] = useState("");
   const [form, setForm] = useState<NewCharacterForm>({
     name: "",
@@ -1067,6 +1081,11 @@ export function ChatPanel({
     modelUrl: "",
     voiceProvider: "mimo",
     voice: "冰糖",
+    audioModel: "mimo-v2.5-tts",
+    voiceId: "冰糖",
+    stylePrompt: "",
+    voiceDesignPrompt: "",
+    voiceCloneSample: "",
     defaultMood: "neutral",
     emotionProfile: "{}",
     avatarType: "image",
@@ -1079,6 +1098,11 @@ export function ChatPanel({
     description: "",
     avatarUrl: "",
     voice: "冰糖",
+    audioModel: "mimo-v2.5-tts" as MimoAudioModel,
+    voiceId: "冰糖",
+    stylePrompt: "",
+    voiceDesignPrompt: "",
+    voiceCloneSample: "",
     defaultMood: "neutral" as (typeof moods)[number],
     relationshipMode: "sweet" as (typeof relationshipModes)[number],
     personalityTagline: ""
@@ -1097,25 +1121,17 @@ export function ChatPanel({
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const activeChatStorageKeyRef = useRef("");
   const archiveInputRef = useRef<HTMLInputElement>(null);
-  const memoryInputRef = useRef<HTMLInputElement>(null);
   const interactionTimeoutRef = useRef<number | null>(null);
-
-  // 记忆总结模式（短上下文模型防超限）：开关状态与当前记忆档案
-  const [summaryMode, setSummaryModeState] = useState(false);
-  const [memoryFile, setMemoryFile] = useState("");
-  const [showMemory, setShowMemory] = useState(false);
-  const [summaryBusy, setSummaryBusy] = useState(false);
 
   const activeCharacter = characters.find((item) => item.id === state.characterId) || initialCharacter || characters[0];
   const activeScene = companionScenes.find((scene) => scene.id === activeSceneId) || companionScenes[0];
   const isCustomCharacter = (characterId: string) => characterId.startsWith("custom-");
   const memoryIsActive = hasUserMemory(userMemory);
 
-  // 切换数字人时，加载该数字人专属的长期记忆
   useEffect(() => {
-    if (!selectedCharacterId) return;
-    setUserMemory(readStoredUserMemory(selectedCharacterId));
-  }, [selectedCharacterId]);
+    setUserMemory(readStoredUserMemory(state.characterId));
+    setMemoryStatus("");
+  }, [state.characterId]);
 
   useEffect(() => {
     if (!activeCharacter) return;
@@ -1124,6 +1140,11 @@ export function ChatPanel({
       description: activeCharacter.description || "",
       avatarUrl: activeCharacter.avatarUrl || "",
       voice: activeCharacter.voiceProfile?.voice || "冰糖",
+      audioModel: (activeCharacter.voiceProfile?.audioModel as MimoAudioModel) || "mimo-v2.5-tts",
+      voiceId: activeCharacter.voiceProfile?.voiceId || "冰糖",
+      stylePrompt: activeCharacter.voiceProfile?.stylePrompt || "",
+      voiceDesignPrompt: activeCharacter.voiceProfile?.voiceDesignPrompt || "",
+      voiceCloneSample: activeCharacter.voiceProfile?.voiceCloneSample || "",
       defaultMood: (moods as readonly string[]).includes(activeCharacter.defaultMood || "")
         ? (activeCharacter.defaultMood as (typeof moods)[number])
         : "neutral",
@@ -1150,31 +1171,6 @@ export function ChatPanel({
       return readStoredChatState(sessionId, preferred, welcomeText) ||
         buildDefaultChatState(preferred, preferred.id, welcomeText);
     });
-
-    // 打开/切换数字人时，从后端拉取与机器人共享的长期记忆并填充到本地消息
-    let cancelled = false;
-    (async () => {
-      const history = await fetchSessionHistory(sessionId);
-      if (cancelled) return;
-      if (history && history.length > 0) {
-        const remote: Bubble[] = history
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
-        if (remote.length > 0) {
-          // 后端会话文件是跨端共享的唯一真相来源：打开/切换数字人时直接以其为准，
-          // 确保网页端能看到并继续机器人的历史对话（会话进行中不会触发本 effect，故不会覆盖正在输入的内容）。
-          setState((prev) => ({ ...prev, messages: remote }));
-        }
-      }
-      // 同步总结模式开关状态与当前记忆档案
-      const meta = await fetchSessionMeta(sessionId);
-      if (cancelled || !meta) return;
-      setSummaryModeState(meta.summaryMode);
-      setMemoryFile(meta.memoryFile || "");
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, [selectedCharacterId, characters, sessionId]);
 
   useEffect(() => {
@@ -1273,7 +1269,24 @@ export function ChatPanel({
     audioRef.current.onended = () => setSpeaking(false);
   };
 
-  const upsertAssistantBubble = (nextText: string, shouldAppend = false) => {
+  const replayMessage = async (message: Bubble) => {
+    if (message.audioUrl) {
+      speakAudio(resolveMediaUrl(message.audioUrl), message.content, true);
+      return;
+    }
+    try {
+      const { audioUrl } = await synthesizeTts({ text: message.content, characterId: state.characterId });
+      if (audioUrl) {
+        speakAudio(resolveMediaUrl(audioUrl), message.content, true);
+        return;
+      }
+    } catch {
+      // 合成失败时退回浏览器语音
+    }
+    speakAudio(undefined, message.content, true);
+  };
+
+  const upsertAssistantBubble = (nextText: string, shouldAppend = false, audioUrl?: string) => {
     setState((prev) => {
       const messages = [...prev.messages];
       const idx = messages.length - 1;
@@ -1293,6 +1306,10 @@ export function ChatPanel({
       } else {
         messages[idx] = { ...messages[idx], content: nextText };
         nextEmotion = inferLocalEmotion(nextText);
+      }
+
+      if (audioUrl && messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+        messages[messages.length - 1] = { ...messages[messages.length - 1], audioUrl };
       }
 
       return { ...prev, messages, emotion: nextEmotion };
@@ -1530,7 +1547,7 @@ export function ChatPanel({
             relationshipMode: payload.context?.activeRelationshipMode || prev.relationshipMode,
             context: payload.context ?? prev.context
           }));
-          upsertAssistantBubble(payload.text, false);
+          upsertAssistantBubble(payload.text, false, payload.audioUrl);
           speakAudio(resolveMediaUrl(payload.audioUrl), payload.text);
         }
       });
@@ -1544,7 +1561,7 @@ export function ChatPanel({
           emotion: payload.emotion,
           relationshipMode: payload.context?.activeRelationshipMode || prev.relationshipMode,
           context: payload.context ?? prev.context,
-          messages: [...prev.messages, { role: "assistant", content: payload.text }]
+          messages: [...prev.messages, { role: "assistant", content: payload.text, audioUrl: payload.audioUrl }]
         }));
         speakAudio(resolveMediaUrl(payload.audioUrl), payload.text);
       } catch (_e) {
@@ -1651,9 +1668,9 @@ export function ChatPanel({
 
   const saveUserMemory = () => {
     try {
-      const saved = writeStoredUserMemory(userMemory, selectedCharacterId);
+      const saved = writeStoredUserMemory(state.characterId, userMemory);
       setUserMemory(saved);
-      setMemoryStatus(hasUserMemory(saved) ? "记忆已保存，会从下一条消息开始生效。" : "记忆已清空。");
+      setMemoryStatus(hasUserMemory(saved) ? "记忆已保存（仅对当前数字人生效），会从下一条消息开始生效。" : "记忆已清空。");
     } catch {
       setMemoryStatus("保存失败，请检查浏览器本地存储权限。");
     }
@@ -1661,7 +1678,8 @@ export function ChatPanel({
 
   const clearUserMemory = () => {
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(userMemoryKey(selectedCharacterId));
+      window.localStorage.removeItem(userMemoryStorageKey(state.characterId));
+      window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
     }
     setUserMemory({ ...emptyUserMemory });
     setMemoryStatus("记忆已清空。");
@@ -1797,12 +1815,20 @@ export function ChatPanel({
     setIsEditSaving(true);
     setEditStatus("");
     try {
+      const effectiveVoice = editForm.audioModel === "mimo-v2.5-tts"
+        ? (editForm.voiceId || "冰糖")
+        : (editForm.voice.trim() || "mimo_default");
       const { human } = await updateDigitalHuman(currentId, {
         name: editForm.name.trim(),
         description: editForm.description.trim(),
         avatarUrl: editForm.avatarUrl.trim() || undefined,
-        voice: editForm.voice.trim() || "冰糖",
+        voice: effectiveVoice,
         voiceProvider: "mimo",
+        audioModel: editForm.audioModel,
+        voiceId: editForm.audioModel === "mimo-v2.5-tts" ? editForm.voiceId : undefined,
+        stylePrompt: editForm.audioModel === "mimo-v2.5-tts" ? editForm.stylePrompt : undefined,
+        voiceDesignPrompt: editForm.audioModel === "mimo-v2.5-tts-voicedesign" ? editForm.voiceDesignPrompt : undefined,
+        voiceCloneSample: editForm.audioModel === "mimo-v2.5-tts-voiceclone" ? editForm.voiceCloneSample : undefined,
         defaultMood: editForm.defaultMood,
         relationshipMode: editForm.relationshipMode,
         personalityTagline: editForm.personalityTagline.trim()
@@ -1813,6 +1839,32 @@ export function ChatPanel({
       setEditStatus(error instanceof Error ? error.message : "保存失败，请重试");
     } finally {
       setIsEditSaving(false);
+    }
+  };
+
+  const handleVoiceCloneFile = async (fileList: FileList | null, mode: "edit" | "create") => {
+    const file = fileList?.[0];
+    if (!file) return;
+    const lower = file.name.toLowerCase();
+    const okType = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"].includes(file.type) || lower.endsWith(".mp3") || lower.endsWith(".wav");
+    if (!okType) {
+      if (mode === "edit") setEditStatus("仅支持 mp3 / wav 格式");
+      else setSpeechError("仅支持 mp3 / wav 格式");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      if (mode === "edit") setEditStatus("音频样本不能超过 10MB");
+      else setSpeechError("音频样本不能超过 10MB");
+      return;
+    }
+    const base64 = await blobToBase64(file);
+    const mime = file.type.includes("wav") ? "audio/wav" : "audio/mpeg";
+    const dataUri = `data:${mime};base64,${base64}`;
+    if (mode === "edit") {
+      setEditForm((prev) => ({ ...prev, voiceCloneSample: dataUri }));
+      setEditStatus("");
+    } else {
+      setForm((prev) => ({ ...prev, voiceCloneSample: dataUri }));
     }
   };
 
@@ -1859,6 +1911,9 @@ export function ChatPanel({
 
     const emotionProfile = parseEmotionProfile(form.emotionProfile);
     const avatarVideoProfile = parseEmotionProfile(form.avatarVideoProfile);
+    const effectiveVoice = form.audioModel === "mimo-v2.5-tts"
+      ? (form.voiceId || "冰糖")
+      : (form.voice.trim() || "mimo_default");
     const payload: CreateHumanRequest = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -1866,7 +1921,12 @@ export function ChatPanel({
       modelUrl: form.modelUrl.trim() || undefined,
       avatarType: form.avatarType,
       voiceProvider: form.voiceProvider,
-      voice: form.voice.trim() || "nova",
+      voice: effectiveVoice,
+      audioModel: form.audioModel,
+      voiceId: form.audioModel === "mimo-v2.5-tts" ? form.voiceId : undefined,
+      stylePrompt: form.audioModel === "mimo-v2.5-tts" ? form.stylePrompt : undefined,
+      voiceDesignPrompt: form.audioModel === "mimo-v2.5-tts-voicedesign" ? form.voiceDesignPrompt : undefined,
+      voiceCloneSample: form.audioModel === "mimo-v2.5-tts-voiceclone" ? form.voiceCloneSample : undefined,
       defaultMood: form.defaultMood,
       personalityTagline: form.personalityTagline.trim(),
       relationshipMode: form.relationshipMode,
@@ -1893,6 +1953,11 @@ export function ChatPanel({
         modelUrl: "",
         voiceProvider: "mimo",
         voice: "冰糖",
+        audioModel: "mimo-v2.5-tts",
+        voiceId: "冰糖",
+        stylePrompt: "",
+        voiceDesignPrompt: "",
+        voiceCloneSample: "",
         emotionProfile: "{}",
         avatarType: "image",
         avatarVideoProfile: "{}",
@@ -2018,55 +2083,6 @@ export function ChatPanel({
     }
   };
 
-  // 备份/恢复的是服务器端共享记忆（mem:<数字人ID>），跨设备/跨服务器可直接迁移
-  const backupMemory = async () => {
-    try {
-      await exportSessionHistory(sessionId);
-      setSpeechError("已下载当前数字人的记忆备份文件。");
-    } catch (error) {
-      setSpeechError(error instanceof Error ? error.message : "备份记忆失败");
-    }
-  };
-
-  const restoreMemory = async (fileList: FileList | null) => {
-    const file = fileList?.[0];
-    if (!file) return;
-    try {
-      const result = await importSessionHistory(sessionId, file);
-      setSpeechError(`已恢复记忆（${result.turns} 条对话），正在刷新...`);
-      window.setTimeout(() => window.location.reload(), 400);
-    } catch (error) {
-      setSpeechError(error instanceof Error ? error.message : "恢复记忆失败");
-    } finally {
-      if (memoryInputRef.current) {
-        memoryInputRef.current.value = "";
-      }
-    }
-  };
-
-  // 开关记忆总结模式：开启后每轮只把「记忆档案 + 最近对话」发给模型，避免短上下文模型超限
-  const toggleSummaryMode = async () => {
-    if (summaryBusy) return;
-    setSummaryBusy(true);
-    try {
-      const next = !summaryMode;
-      const meta = await setSummaryMode(sessionId, next, state.characterId || selectedCharacterId);
-      setSummaryModeState(meta.summaryMode);
-      setMemoryFile(meta.memoryFile || "");
-      if (meta.summaryMode && meta.memoryFile) {
-        setShowMemory(true);
-        setSpeechError(`已开启记忆总结，并生成记忆档案（${meta.memoryFile.length} 字）。`);
-      } else {
-        setShowMemory(false);
-        setSpeechError("已关闭记忆总结，后续将发送完整历史（短上下文模型可能超限）。");
-      }
-    } catch (error) {
-      setSpeechError(error instanceof Error ? error.message : "设置总结模式失败");
-    } finally {
-      setSummaryBusy(false);
-    }
-  };
-
   return (
     <div className="layout">
       <section className="left">
@@ -2092,7 +2108,7 @@ export function ChatPanel({
           >
             {relationshipModes.map((mode) => (
               <option key={mode} value={mode}>
-                {mode}
+                {relationshipModeLabelMap[mode]}
               </option>
             ))}
           </select>
@@ -2162,24 +2178,72 @@ export function ChatPanel({
             </div>
 
             <label className="field">
-              <span className="field-label">音色</span>
+              <span className="field-label">音频模型</span>
               <select
-                value={MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voice) ? editForm.voice : ""}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value || "" }))}
+                value={editForm.audioModel}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, audioModel: e.target.value as MimoAudioModel }))}
               >
-                {MIMO_VOICE_OPTIONS.map((o) => (
+                {MIMO_AUDIO_MODELS.map((o) => (
                   <option key={o.id} value={o.id}>{o.label}</option>
                 ))}
-                <option value="">其他音色（请在下方填写）</option>
               </select>
-              {(editForm.voice === "" || !MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voice)) && (
-                <input
-                  value={editForm.voice}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, voice: e.target.value }))}
-                  placeholder="填写 MiMo 音色名称"
-                />
-              )}
+              <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === editForm.audioModel)?.desc}</small>
             </label>
+
+            {editForm.audioModel === "mimo-v2.5-tts" && (
+              <label className="field">
+                <span className="field-label">预制音色（必选）</span>
+                <select
+                  value={MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voiceId) ? editForm.voiceId : ""}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, voiceId: e.target.value || "冰糖" }))}
+                >
+                  {MIMO_VOICE_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {editForm.audioModel === "mimo-v2.5-tts" && (
+              <label className="field">
+                <span className="field-label">风格描述（可选）</span>
+                <input
+                  value={editForm.stylePrompt}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, stylePrompt: e.target.value }))}
+                  placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
+                />
+                <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
+              </label>
+            )}
+
+            {editForm.audioModel === "mimo-v2.5-tts-voicedesign" && (
+              <label className="field">
+                <span className="field-label">音色描述（必填）</span>
+                <input
+                  value={editForm.voiceDesignPrompt}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, voiceDesignPrompt: e.target.value }))}
+                  placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
+                />
+                <small>这段文字会作为音色设计描述传给模型。</small>
+              </label>
+            )}
+
+            {editForm.audioModel === "mimo-v2.5-tts-voiceclone" && (
+              <label className="field">
+                <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
+                <label className="file-picker">
+                  选择音频样本
+                  <input
+                    type="file"
+                    accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav"
+                    onChange={(e) => handleVoiceCloneFile(e.currentTarget.files, "edit")}
+                  />
+                </label>
+                {editForm.voiceCloneSample ? (
+                  <small className="field-hint">已上传样本（{(editForm.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
+                ) : null}
+              </label>
+            )}
 
             <label className="field">
               <span className="field-label">默认情绪</span>
@@ -2296,25 +2360,72 @@ export function ChatPanel({
             </details>
 
             <label className="field">
-              <span className="field-label">音色</span>
+              <span className="field-label">音频模型</span>
               <select
-                value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voice) ? form.voice : ""}
-                onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value || "" }))}
+                value={form.audioModel}
+                onChange={(e) => setForm((prev) => ({ ...prev, audioModel: e.target.value as MimoAudioModel }))}
               >
-                {MIMO_VOICE_OPTIONS.map((o) => (
+                {MIMO_AUDIO_MODELS.map((o) => (
                   <option key={o.id} value={o.id}>{o.label}</option>
                 ))}
-                <option value="">其他音色（请在下方填写）</option>
               </select>
-              {(form.voice === "" || !MIMO_VOICE_OPTIONS.some((o) => o.id === form.voice)) && (
-                <input
-                  value={form.voice}
-                  onChange={(e) => setForm((prev) => ({ ...prev, voice: e.target.value }))}
-                  placeholder="填写 MiMo 音色名称"
-                />
-              )}
-              <small className="field-hint">语音合成由 MiMo TTS 自动接入，无需额外配置 OpenAI/Azure。</small>
+              <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === form.audioModel)?.desc}</small>
             </label>
+
+            {form.audioModel === "mimo-v2.5-tts" && (
+              <label className="field">
+                <span className="field-label">预制音色（必选）</span>
+                <select
+                  value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voiceId) ? form.voiceId : ""}
+                  onChange={(e) => setForm((prev) => ({ ...prev, voiceId: e.target.value || "冰糖" }))}
+                >
+                  {MIMO_VOICE_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {form.audioModel === "mimo-v2.5-tts" && (
+              <label className="field">
+                <span className="field-label">风格描述（可选）</span>
+                <input
+                  value={form.stylePrompt}
+                  onChange={(e) => setForm((prev) => ({ ...prev, stylePrompt: e.target.value }))}
+                  placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
+                />
+                <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
+              </label>
+            )}
+
+            {form.audioModel === "mimo-v2.5-tts-voicedesign" && (
+              <label className="field">
+                <span className="field-label">音色描述（必填）</span>
+                <input
+                  value={form.voiceDesignPrompt}
+                  onChange={(e) => setForm((prev) => ({ ...prev, voiceDesignPrompt: e.target.value }))}
+                  placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
+                />
+                <small>这段文字会作为音色设计描述传给模型。</small>
+              </label>
+            )}
+
+            {form.audioModel === "mimo-v2.5-tts-voiceclone" && (
+              <label className="field">
+                <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
+                <label className="file-picker">
+                  选择音频样本
+                  <input
+                    type="file"
+                    accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav"
+                    onChange={(e) => handleVoiceCloneFile(e.currentTarget.files, "create")}
+                  />
+                </label>
+                {form.voiceCloneSample ? (
+                  <small className="field-hint">已上传样本（{(form.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
+                ) : null}
+              </label>
+            )}
 
             <label className="field">
               <span className="field-label">默认情绪</span>
@@ -2389,7 +2500,7 @@ export function ChatPanel({
             阶段：{state.context ? relationshipLabelMap[state.context.relationshipAffinity] : "待启动"}（{state.context?.turnCount || 0}
             回合）
           </p>
-          <p>对话风格：{state.relationshipMode || state.context?.activeRelationshipMode || "sweet"}</p>
+          <p>对话风格：{relationshipModeLabelMap[state.relationshipMode || state.context?.activeRelationshipMode || "sweet"]}</p>
           <p>上次情绪：{state.context?.lastEmotion || state.emotion}</p>
           {state.context?.summary ? <p className="relationship-summary">{state.context.summary}</p> : null}
           {state.context?.userSignals?.length ? (
@@ -2563,21 +2674,6 @@ export function ChatPanel({
                 <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={isLoading}>
                   <Upload size={16} /> 导入记录
                 </button>
-                <button type="button" onClick={backupMemory} disabled={isLoading}>
-                  <Save size={16} /> 备份记忆
-                </button>
-                <button type="button" onClick={() => memoryInputRef.current?.click()} disabled={isLoading}>
-                  <RotateCcw size={16} /> 恢复记忆
-                </button>
-                <button
-                  type="button"
-                  onClick={toggleSummaryMode}
-                  disabled={isLoading || summaryBusy}
-                  aria-pressed={summaryMode}
-                  title="开启后每轮只把「记忆档案 + 最近若干条」发给模型，避免短上下文模型超限"
-                >
-                  <FileText size={16} /> 记忆总结：{summaryMode ? "开" : "关"}
-                </button>
                 <button type="button" onClick={toggleAvatarMode}>
                   {use3D ? <ImageIcon size={16} /> : <Box size={16} />}
                   切换到 {use3D ? "2D" : "3D"}
@@ -2597,30 +2693,7 @@ export function ChatPanel({
             accept="application/json,.json"
             onChange={(event) => void importArchive(event.currentTarget.files)}
           />
-          <input
-            ref={memoryInputRef}
-            className="archive-input"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => void restoreMemory(event.currentTarget.files)}
-          />
         </div>
-        {summaryMode && (
-          <div className="memory-summary-panel">
-            <button
-              type="button"
-              className="memory-summary-toggle"
-              onClick={() => setShowMemory((prev) => !prev)}
-            >
-              <FileText size={14} /> 记忆档案（{memoryFile.length} 字）{showMemory ? "▴" : "▾"}
-            </button>
-            {showMemory && (
-              <pre className="memory-summary-text">
-                {memoryFile.trim() || "（暂无内容，聊几句后会自动生成并压缩）"}
-              </pre>
-            )}
-          </div>
-        )}
         <div className="chat-list" ref={chatScrollRef}>
           {state.messages.map((message, idx) => (
             <div key={`${message.role}-${idx}`} className={`message-row ${message.role}`}>
@@ -2637,7 +2710,7 @@ export function ChatPanel({
                   <button
                     type="button"
                     className="message-audio-btn"
-                    onClick={() => speakAudio(undefined, message.content, true)}
+                    onClick={() => void replayMessage(message)}
                     aria-label="播放这条回复"
                     title="播放这条回复"
                   >

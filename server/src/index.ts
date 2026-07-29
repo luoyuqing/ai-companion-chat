@@ -135,6 +135,11 @@ app.post("/api/digital-humans", async (req, res) => {
       modelUrl,
       voice,
       voiceProvider,
+      audioModel,
+      voiceId,
+      stylePrompt,
+      voiceDesignPrompt,
+      voiceCloneSample,
       defaultMood,
       emotionProfile,
       avatarType,
@@ -148,6 +153,11 @@ app.post("/api/digital-humans", async (req, res) => {
       modelUrl?: string;
       voice?: string;
       voiceProvider?: "openai" | "azure" | "local" | "mimo";
+      audioModel?: DigitalHumanConfig["voiceProfile"]["audioModel"];
+      voiceId?: string;
+      stylePrompt?: string;
+      voiceDesignPrompt?: string;
+      voiceCloneSample?: string;
       defaultMood?: DigitalHumanConfig["defaultMood"];
       emotionProfile?: EmotionProfile;
       avatarType?: AvatarRenderMode | string;
@@ -160,6 +170,8 @@ app.post("/api/digital-humans", async (req, res) => {
       return res.status(400).json({ error: "name、description、avatarUrl、voice 都不能为空" });
     }
 
+    const provider = (voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" ? voiceProvider : "openai") as DigitalHumanConfig["voiceProfile"]["provider"];
+
     const customs = await loadCustomHumans();
     const created: DigitalHumanConfig = {
       id: `custom-${Date.now()}`,
@@ -171,7 +183,15 @@ app.post("/api/digital-humans", async (req, res) => {
       emotionProfile: normalizeExpressionProfile(emotionProfile),
       avatarType: normalizeAvatarType(avatarType),
       avatarVideoProfile: normalizeExpressionProfile(avatarVideoProfile),
-      voiceProfile: { provider: (voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" ? voiceProvider : "openai"), voice },
+      voiceProfile: {
+        provider,
+        voice,
+        audioModel: audioModel || (provider === "mimo" ? "mimo-v2.5-tts" : undefined),
+        voiceId: voiceId?.trim() || undefined,
+        stylePrompt: stylePrompt?.trim() || undefined,
+        voiceDesignPrompt: voiceDesignPrompt?.trim() || undefined,
+        voiceCloneSample: voiceCloneSample?.trim() || undefined
+      },
       relationshipMode: ensureRelationshipMode(relationshipMode),
       defaultMood: ensureSupportedMood(defaultMood)
     };
@@ -205,14 +225,28 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
 
     const voice = typeof body.voice === "string" ? body.voice.trim() : "";
     const voiceProvider = body.voiceProvider;
+    const audioModel = typeof body.audioModel === "string" ? body.audioModel.trim() : undefined;
+    const voiceId = typeof body.voiceId === "string" ? body.voiceId.trim() : undefined;
+    const stylePrompt = typeof body.stylePrompt === "string" ? body.stylePrompt : undefined;
+    const voiceDesignPrompt = typeof body.voiceDesignPrompt === "string" ? body.voiceDesignPrompt : undefined;
+    const voiceCloneSample = typeof body.voiceCloneSample === "string" ? body.voiceCloneSample : undefined;
     const characters = await getCharacters();
     const current = characters.find((item) => item.id === characterId);
-    if (voice || voiceProvider !== undefined) {
+    if (voice || voiceProvider !== undefined || audioModel !== undefined || voiceId !== undefined || stylePrompt !== undefined || voiceDesignPrompt !== undefined || voiceCloneSample !== undefined) {
       const provider =
         voiceProvider === "azure" || voiceProvider === "local" || voiceProvider === "mimo" || voiceProvider === "openai"
           ? voiceProvider
           : current?.voiceProfile.provider || "mimo";
-      patch.voiceProfile = { provider, voice: voice || current?.voiceProfile.voice || "冰糖" };
+      const base = current?.voiceProfile || { provider, voice: "mimo_default" };
+      patch.voiceProfile = {
+        provider,
+        voice: voice || base.voice || "mimo_default",
+        audioModel: (audioModel || base.audioModel || (provider === "mimo" ? "mimo-v2.5-tts" : undefined)) as DigitalHumanConfig["voiceProfile"]["audioModel"],
+        voiceId: voiceId !== undefined ? voiceId : base.voiceId,
+        stylePrompt: stylePrompt !== undefined ? stylePrompt : base.stylePrompt,
+        voiceDesignPrompt: voiceDesignPrompt !== undefined ? voiceDesignPrompt : base.voiceDesignPrompt,
+        voiceCloneSample: voiceCloneSample !== undefined ? voiceCloneSample : base.voiceCloneSample
+      };
     }
 
     if (Object.keys(patch).length === 0) {
@@ -482,6 +516,26 @@ app.delete("/api/digital-humans/:id", async (req, res) => {
   delete overridesData.overrides[characterId];
   await writeHumanOverrides(overridesData);
   res.json({ ok: true });
+});
+
+app.post("/api/tts", async (req, res) => {
+  try {
+    const { text, characterId } = (req.body ?? {}) as { text?: string; characterId?: string };
+    const trimmed = (text || "").trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: "text is required" });
+    }
+    const characters = await getCharacters();
+    const character = resolveCharacter(characters, characterId);
+    if (!character) {
+      return res.status(404).json({ error: "character not found" });
+    }
+    const audioUrl = await synthesizeSpeech(trimmed, character);
+    res.json({ audioUrl });
+  } catch (error) {
+    console.error("tts synthesize failed", error);
+    res.status(500).json({ error: "tts failed" });
+  }
 });
 
 app.use("/audio", express.static(AUDIO_DIR));

@@ -122,6 +122,42 @@ function resolveFlavorMode(
   );
 }
 
+function stripNarration(text: string): string {
+  if (!text) return text;
+  let out = text;
+  // 去掉 *动作描写*
+  out = out.replace(/\*[^*\n]{1,120}\*/g, "");
+  // 开头（风格）标签：仅当像语音风格标签时保留（短、无标点、无人称）
+  let leadTag = "";
+  const lead = out.match(/^[（(]([^（）()\n]{1,20})[）)]/);
+  if (lead && lead[1]) {
+    const inner = lead[1];
+    const isStyle = inner.length <= 12 && !/[，。！？；：…,.!?;:你我他她它的着了]/.test(inner);
+    if (isStyle) leadTag = "（" + inner + "）";
+    out = out.slice(lead[0].length);
+  }
+  // 其余圆括号内容一律视为叙事描写，删除
+  out = out.replace(/[（(][^（）()\n]{0,200}[）)]/g, "");
+  // 方括号：只保留短音频标签（如[轻笑][长叹一口气]），长内容视为描写删除
+  out = out.replace(/\[([^\[\]\n]{1,60})\]/g, (m, inner: string) => {
+    return inner.length <= 8 && !/[，。！？…,.!?]/.test(inner) ? m : "";
+  });
+  out = out
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  return (leadTag + out).trim();
+}
+
+function sanitizeHistory(history: ChatMessage[]): ChatMessage[] {
+  return history.map((m) => {
+    if (m.role !== "assistant" || typeof m.content !== "string") return m;
+    const cleaned = stripNarration(m.content);
+    return { ...m, content: cleaned || "……" };
+  });
+}
+
 function normalizeModelText(
   character: DigitalHumanConfig,
   sessionContext: SessionContext | undefined,
@@ -130,7 +166,7 @@ function normalizeModelText(
   overrideMode?: RelationshipMode,
   sceneHint?: string
 ) {
-  const safeText = String(rawText || "").trim();
+  const safeText = stripNarration(String(rawText || "").trim());
   if (safeText) {
     return safeText;
   }
@@ -272,11 +308,24 @@ function buildSystemPrompt(
     "你是一个有稳定人格、关系连续性和真实情绪反应的陪伴型数字人。语气像亲密关系中的自然聊天，不像客服、心理咨询模板或功能说明。",
     "先回应用户真正的情绪和意图，再延续话题。不要复述、改写或引用用户整句话，也不要每次都宣布你记得什么。",
     "默认用自然中文回复 1 到 3 个短段落，每段一两句；短消息就短回，深聊时再展开。一次最多问一个真正相关的问题。",
-    "允许自然使用停顿、轻笑和简短动作感，但不要堆砌括号动作、波浪号、称呼或甜腻套话。避免‘我会陪着你’‘继续说吧’等固定结尾连续出现。",
-    "安慰时先接住感受，不急着给建议；暧昧时具体、主动、有来有回；睡前时放慢节奏；约会时加入共同场景和细节。",
+    "输出纪律（必须遵守）：只输出角色「说出口」的对话内容。严禁输出心理活动、内心独白、动作描写、神态描写、场景或环境描述、旁白等任何叙事性文字；不要用星号、括号或破折号夹带动作与心理描写，不要堆砌波浪号、称呼或甜腻套话。避免‘我会陪着你’‘继续说吧’等固定结尾连续出现。即使更早的对话记录里出现过括号动作、神态或场景描写，也绝对不要模仿——从当前回复开始只输出说出口的话。",
+    "安慰时先接住感受，不急着给建议；暧昧时具体、主动、有来有回；睡前时放慢节奏；约会时也只能用对话本身营造氛围，绝不输出场景或动作描写。",
     `关系风格参考：${vibe}。`,
     `当前数字人：${character.name}。性格：${character.description}`
   ];
+
+  const voiceEnabled = (process.env.TTS_PROVIDER || character.voiceProfile?.provider) === "mimo";
+  if (voiceEnabled) {
+    parts.push(
+      "语音标签（唯一允许的括号用法）：你的回复会被合成为语音，允许并鼓励嵌入语音控制标签来传递情绪：" +
+      "1）可在回复开头用（风格）标签设定整体风格，如（温柔）（俏皮）（慵懒 撒娇）（开心）（伤感）；" +
+      "2）可在句中插入[音频标签]做细粒度控制，如[轻笑][叹气][吸气][咽咽][擒娇][语速加快][小声]。" +
+      "示例：（温柔）今天辛苦啦…[轻笑]我给你留了个好消息哦。" +
+      "注意：括号里只能放这些语音标签，绝不能放动作、神态或心理描写；（风格）标签只允许出现一次且必须位于整条回复的第一个字符，回复中部与后续段落一律不得再出现圆括号标签，只能用[音频标签]；全文[音频标签]至多两三个，不要滥用。"
+    );
+  } else {
+    parts.push("不要在回复中使用任何括号标签。");
+  }
 
   if (character.personalityTagline) {
     parts.push(`人设补充：${character.personalityTagline}`);
@@ -341,7 +390,7 @@ export async function askAssistant(
         role: "system",
         content: buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
       },
-      ...history,
+      ...sanitizeHistory(history),
       { role: "user", content: userText }
     ]
   });
@@ -420,7 +469,7 @@ export async function streamAssistant(
         role: "system",
         content: buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
       },
-      ...history,
+      ...sanitizeHistory(history),
       { role: "user", content: userText }
     ]
   });
