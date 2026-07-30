@@ -1139,6 +1139,13 @@ export async function resetPromptSettings(): Promise<SystemSettings> {
   return settingsRequest<SystemSettings>("/api/settings/prompts/reset", { method: "POST", body: "{}" });
 }
 
+export async function restartService(): Promise<{ ok: boolean; message: string }> {
+  return settingsRequest<{ ok: boolean; message: string }>("/api/settings/restart-service", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
 export async function fetchLlmModels(baseUrl?: string, apiKey?: string): Promise<string[]> {
   const data = await settingsRequest<{ models: string[] }>("/api/settings/llm/models", {
     method: "POST",

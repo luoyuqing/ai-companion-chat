@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, ShieldCheck, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, Server, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DigitalHumanManager } from "./DigitalHumanManager";
 import {
@@ -11,6 +11,7 @@ import {
   fetchSettings,
   hasSettingsToken,
   resetPromptSettings,
+  restartService,
   saveSettings,
   settingsLogin,
   settingsLogout
@@ -24,7 +25,7 @@ import {
  * - 令牌只保存在内存（不落 localStorage/sessionStorage），刷新页面即需重新输入密码。
  */
 
-type Tab = "humans" | "llm" | "tts" | "prompts" | "security";
+type Tab = "humans" | "llm" | "tts" | "prompts" | "security" | "service";
 
 const PROMPT_FIELDS: Array<{ key: keyof Omit<PromptSettings, "sceneHints">; label: string; rows?: number }> = [
   { key: "globalSystem", label: "全局系统提示词", rows: 10 },
@@ -192,6 +193,18 @@ export function SettingsPage({
       flash("提示词已恢复默认");
     });
 
+  const doRestartService = () =>
+    guard(async () => {
+      if (
+        !window.confirm(
+          "确认重启后端服务？重启期间服务会短暂中断（约 5 秒），重启后需重新输入设置密码。\n修改数字人 Telegram 专属 bot Token 后必须重启才能生效。"
+        )
+      )
+        return;
+      const data = await restartService();
+      flash(data.message || "重启指令已下发");
+    });
+
   const pullModels = async () => {
     if (modelsBusy) return;
     setModelsBusy(true);
@@ -300,6 +313,7 @@ export function SettingsPage({
           <button type="button" className={tab === "tts" ? "active" : ""} onClick={() => setTab("tts")}>语音 TTS</button>
           <button type="button" className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}>提示词</button>
           <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>安全</button>
+          <button type="button" className={tab === "service" ? "active" : ""} onClick={() => setTab("service")}>重启服务</button>
         </nav>
 
         {notice ? <p className="settings-notice">{notice}</p> : null}
@@ -308,6 +322,23 @@ export function SettingsPage({
         {tab === "humans" ? (
           <div className="settings-body">
             <DigitalHumanManager characters={characters} onCharactersChange={onCharactersChange} />
+          </div>
+        ) : tab === "service" ? (
+          <div className="settings-body">
+            <section className="settings-section">
+              <h3 className="settings-subtitle">
+                <Server size={16} /> 重启后端服务
+              </h3>
+              <p className="settings-lock-tip">
+                修改数字人的 Telegram 专属机器人 Token 后，新的 bot 仅在<strong>服务启动时</strong>加载，必须重启后端服务才能生效；其余配置（LLM / TTS / 提示词 / 长期记忆 / 会话）均为运行时热更新，无需重启。
+              </p>
+              <p className="settings-lock-tip">
+                点击下方按钮将执行 <code>sudo systemctl restart digital-girlfriend</code>。重启过程约需 5 秒，期间服务短暂不可用；重启后内存中的解锁令牌失效，需重新输入设置密码。
+              </p>
+              <button type="button" className="settings-primary-btn danger" disabled={busy} onClick={() => void doRestartService()}>
+                <Server size={16} /> 重启服务
+              </button>
+            </section>
           </div>
         ) : !settings ? (
           <p className="settings-loading">正在加载设置...</p>

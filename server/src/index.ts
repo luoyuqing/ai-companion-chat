@@ -1,6 +1,7 @@
 import "dotenv/config";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 import express, { Response } from "express";
 import cors from "cors";
 
@@ -146,6 +147,24 @@ app.post("/api/settings/llm/models", async (req, res) => {
   }
 });
 
+
+// 重启后端服务（如修改数字人 Telegram 专属 bot token 后需重启才能生效）。
+// 先向客户端回包，再以 detached 方式延迟执行重启，避免进程被杀前响应未送达、
+// 以及重启命令随进程退出而中断。服务名可经 env DG_SERVICE_NAME 覆盖。
+const DG_SERVICE_NAME = process.env.DG_SERVICE_NAME || "digital-girlfriend";
+app.post("/api/settings/restart-service", (_req, res) => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(DG_SERVICE_NAME)) {
+    return res.status(500).json({ error: "服务名配置非法" });
+  }
+  res.json({ ok: true, message: `已下发重启指令，服务「${DG_SERVICE_NAME}」将在数秒后重启` });
+  setTimeout(() => {
+    try {
+      spawn("sudo", ["systemctl", "restart", DG_SERVICE_NAME], { detached: true, stdio: "ignore" }).unref();
+    } catch (err) {
+      console.error("重启服务失败:", err);
+    }
+  }, 800);
+});
 
 app.post("/api/models/upload", async (req, res) => {
   try {
