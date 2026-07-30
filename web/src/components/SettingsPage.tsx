@@ -1,6 +1,8 @@
 import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { DigitalHumanManager } from "./DigitalHumanManager";
 import {
+  DigitalHuman,
   PromptSettings,
   SystemSettings,
   changeSettingsPassword,
@@ -22,7 +24,7 @@ import {
  * - 令牌只保存在内存（不落 localStorage/sessionStorage），刷新页面即需重新输入密码。
  */
 
-type Tab = "llm" | "tts" | "prompts" | "security";
+type Tab = "humans" | "llm" | "tts" | "prompts" | "security";
 
 const PROMPT_FIELDS: Array<{ key: keyof Omit<PromptSettings, "sceneHints">; label: string; rows?: number }> = [
   { key: "globalSystem", label: "全局系统提示词", rows: 10 },
@@ -44,14 +46,22 @@ const SCENE_FIELDS: Array<{ key: keyof PromptSettings["sceneHints"]; label: stri
   { key: "bedtime", label: "睡前陪伴" }
 ];
 
-export function SettingsPage({ onClose }: { onClose: () => void }) {
+export function SettingsPage({
+  onClose,
+  characters,
+  onCharactersChange
+}: {
+  onClose: () => void;
+  characters: DigitalHuman[];
+  onCharactersChange: (next: DigitalHuman[]) => void;
+}) {
   const [unlocked, setUnlocked] = useState(hasSettingsToken());
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
 
-  const [tab, setTab] = useState<Tab>("llm");
+  const [tab, setTab] = useState<Tab>("humans");
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -285,6 +295,7 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         </header>
 
         <nav className="settings-tabs">
+          <button type="button" className={tab === "humans" ? "active" : ""} onClick={() => setTab("humans")}>数字人管理</button>
           <button type="button" className={tab === "llm" ? "active" : ""} onClick={() => setTab("llm")}>LLM 模型</button>
           <button type="button" className={tab === "tts" ? "active" : ""} onClick={() => setTab("tts")}>语音 TTS</button>
           <button type="button" className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}>提示词</button>
@@ -294,7 +305,11 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
         {notice ? <p className="settings-notice">{notice}</p> : null}
         {loadError ? <p className="settings-error">{loadError}</p> : null}
 
-        {!settings ? (
+        {tab === "humans" ? (
+          <div className="settings-body">
+            <DigitalHumanManager characters={characters} onCharactersChange={onCharactersChange} />
+          </div>
+        ) : !settings ? (
           <p className="settings-loading">正在加载设置...</p>
         ) : (
           <div className="settings-body">

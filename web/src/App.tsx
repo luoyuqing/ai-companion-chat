@@ -2,7 +2,7 @@ import { ArrowRight, AppWindow, Camera, MessageCircle, Settings, Smartphone, Spa
 import { useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { SettingsPage } from "./components/SettingsPage";
-import { DigitalHuman, deleteDigitalHuman, fetchHumans } from "./services/api";
+import { DigitalHuman, fetchHumans } from "./services/api";
 
 
 type ViewMode = "landing" | "chat";
@@ -129,28 +129,13 @@ export default function App() {
     }
   };
 
-  const handleCharacterUpdate = (human: DigitalHuman) => {
-    setCharacters((current) => current.map((item) => (item.id === human.id ? human : item)));
-  };
-
-  const handleCharacterDelete = async (characterId: string) => {
-    const safeId = characterId?.trim() || "";
-    if (!safeId) return;
-
-    try {
-      await deleteDigitalHuman(safeId);
-      setCharacters((current) => {
-        const next = current.filter((item) => item.id !== safeId);
-        if (selectedCharacterId === safeId) {
-          const fallback = next[0]?.id || current[0]?.id;
-          if (fallback) {
-            handleCharacterChange(fallback);
-          }
-        }
-        return next.length ? next : current;
-      });
-    } catch {
-      setError("删除数字人失败，请重试");
+  // 数字人列表统一由「设置页 → 数字人管理」维护，这里只做状态同步与选中兜底
+  const applyCharacters = (next: DigitalHuman[]) => {
+    setCharacters(next);
+    if (!next.length) return;
+    const stillExists = next.some((item) => item.id === selectedCharacterId);
+    if (!stillExists) {
+      handleCharacterChange(next[0].id);
     }
   };
 
@@ -271,12 +256,6 @@ export default function App() {
           sessionId={sessionId}
           selectedCharacterId={selectedCharacterId || characters[0]?.id || "lina"}
           onResetSession={resetSession}
-          onCreate={(human) => {
-            setCharacters((prev) => [...prev, human]);
-            handleCharacterChange(human.id);
-          }}
-          onDelete={handleCharacterDelete}
-          onUpdate={handleCharacterUpdate}
           onCharacterChange={handleCharacterChange}
         />
       )}
@@ -336,7 +315,13 @@ export default function App() {
   return (
     <main className="container">
       {viewMode === "landing" ? landingContent : chatContent}
-      {showSettings ? <SettingsPage onClose={() => setShowSettings(false)} /> : null}
+      {showSettings ? (
+        <SettingsPage
+          onClose={() => setShowSettings(false)}
+          characters={characters}
+          onCharactersChange={applyCharacters}
+        />
+      ) : null}
     </main>
   );
 }
