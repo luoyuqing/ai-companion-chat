@@ -1,5 +1,5 @@
 import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, Server, ShieldCheck, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DigitalHumanManager } from "./DigitalHumanManager";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
@@ -66,8 +66,11 @@ export function SettingsPage({
   const [tab, setTab] = useState<Tab>("humans");
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeType, setNoticeType] = useState<"success" | "error" | "info">("info");
+  const flashTimer = useRef<number | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
 
@@ -142,29 +145,40 @@ export function SettingsPage({
     }
   };
 
-  const flash = (text: string) => {
+  const flash = (text: string, type: "success" | "error" | "info" = "info") => {
     setNotice(text);
-    window.setTimeout(() => setNotice(null), 2500);
+    setNoticeType(type);
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setNotice(null), 2800);
   };
 
-  const guard = async (fn: () => Promise<void>) => {
-    if (busy) return;
-    setBusy(true);
+  const markSaved = (key: string) => {
+    setSavedKey(key);
+    window.setTimeout(() => setSavedKey((k) => (k === key ? null : k)), 1800);
+  };
+
+  const guard = async (key: string, fn: () => Promise<void>) => {
+    if (saving) return;
+    setSaving(key);
     try {
       await fn();
     } catch (err) {
       if (err instanceof Error && err.message === "SETTINGS_UNAUTHORIZED") {
         setUnlocked(false);
       } else {
-        flash(err instanceof Error ? err.message : "操作失败");
+        flash(err instanceof Error ? err.message : "操作失败", "error");
       }
     } finally {
-      setBusy(false);
+      setSaving(null);
     }
   };
 
+  /** 保存按钮文案：进行中 / 已成功 / 默认 */
+  const saveLabel = (key: string, idle: string, savingText = "保存中...") =>
+    saving === key ? savingText : savedKey === key ? "✓ 已保存" : idle;
+
   const saveLlm = () =>
-    guard(async () => {
+    guard("llm", async () => {
       const data = await saveSettings({
         llm: {
           baseUrl: llmBaseUrl.trim(),
@@ -174,28 +188,30 @@ export function SettingsPage({
         }
       });
       applySettings(data);
-      flash("LLM 配置已保存");
+      markSaved("llm");
+      flash("LLM 配置已保存", "success");
     });
 
   const saveTts = () =>
-    guard(async () => {
+    guard("tts", async () => {
       if (!ttsApiKey.trim()) {
-        flash("未输入新的 API Key，无需保存");
+        flash("未输入新的 API Key，无需保存", "info");
         return;
       }
       const data = await saveSettings({ tts: { apiKey: ttsApiKey.trim() } });
       applySettings(data);
-      flash("TTS 密钥已保存");
+      markSaved("tts");
+      flash("TTS 密钥已保存", "success");
     });
 
   const saveRh = () =>
-    guard(async () => {
+    guard("rh", async () => {
       const words = rhTriggerWords
         .split(/[\n,，]/)
         .map((w) => w.trim())
         .filter(Boolean);
       if (words.length === 0) {
-        flash("至少需要保留一个触发词");
+        flash("至少需要保留一个触发词", "info");
         return;
       }
       const timeoutSec = Math.max(10, Math.min(600, Number(rhTimeoutSec) || 120));
@@ -206,28 +222,31 @@ export function SettingsPage({
       if (rhApiKey.trim()) payload.apiKey = rhApiKey.trim();
       const data = await saveSettings({ runningHub: payload });
       applySettings(data);
-      flash(rhApiKey.trim() ? "生图设置已保存" : "触发词 / 超时已保存");
+      markSaved("rh");
+      flash(rhApiKey.trim() ? "生图设置已保存" : "触发词 / 超时已保存", "success");
     });
 
   const savePrompts = () =>
-    guard(async () => {
+    guard("prompts", async () => {
       if (!prompts) return;
       const data = await saveSettings({ prompts });
       applySettings(data);
-      flash("提示词已保存");
+      markSaved("prompts");
+      flash("提示词已保存", "success");
     });
 
   const doResetPrompts = () =>
-    guard(async () => {
+    guard("resetPrompts", async () => {
       const data = await resetPromptSettings();
       applySettings(data);
-      flash("提示词已恢复默认");
+      markSaved("resetPrompts");
+      flash("提示词已恢复默认", "success");
     });
 
   const doRestartService = () =>
-    guard(async () => {
+    guard("restart", async () => {
       const data = await restartService();
-      flash(data.message || "重启指令已下发");
+      flash(data.message || "重启指令已下发", "success");
     });
 
   const pullModels = async () => {
@@ -236,12 +255,12 @@ export function SettingsPage({
     try {
       const models = await fetchLlmModels(llmBaseUrl.trim() || undefined, llmApiKey.trim() || undefined);
       setModelOptions(models);
-      if (models.length === 0) flash("拉取成功但模型列表为空");
+      if (models.length === 0) flash("拉取成功但模型列表为空", "info");
     } catch (err) {
       if (err instanceof Error && err.message === "SETTINGS_UNAUTHORIZED") {
         setUnlocked(false);
       } else {
-        flash(err instanceof Error ? err.message : "拉取模型失败");
+        flash(err instanceof Error ? err.message : "拉取模型失败", "error");
       }
     } finally {
       setModelsBusy(false);
@@ -249,13 +268,13 @@ export function SettingsPage({
   };
 
   const doChangePassword = () =>
-    guard(async () => {
+    guard("password", async () => {
       if (newPwd.length < 4) {
-        flash("新密码至少 4 位");
+        flash("新密码至少 4 位", "info");
         return;
       }
       if (newPwd !== newPwd2) {
-        flash("两次输入的新密码不一致");
+        flash("两次输入的新密码不一致", "info");
         return;
       }
       await changeSettingsPassword(oldPwd, newPwd);
@@ -265,7 +284,7 @@ export function SettingsPage({
       // 改密后后端令牌全部作废，回到锁定态
       clearSettingsToken();
       setUnlocked(false);
-      flash("密码已修改，请用新密码重新解锁");
+      flash("密码已修改，请用新密码重新解锁", "success");
     });
 
   const lockAndClose = async () => {
@@ -342,12 +361,15 @@ export function SettingsPage({
           <button type="button" className={tab === "service" ? "active" : ""} onClick={() => setTab("service")}>重启服务</button>
         </nav>
 
-        {notice ? <p className="settings-notice">{notice}</p> : null}
         {loadError ? <p className="settings-error">{loadError}</p> : null}
 
         {tab === "humans" ? (
           <div className="settings-body">
-            <DigitalHumanManager characters={characters} onCharactersChange={onCharactersChange} />
+            <DigitalHumanManager
+              characters={characters}
+              onCharactersChange={onCharactersChange}
+              notify={(msg, type) => flash(msg, type)}
+            />
           </div>
         ) : tab === "service" ? (
           <div className="settings-body">
@@ -361,8 +383,8 @@ export function SettingsPage({
               <p className="settings-lock-tip">
                 点击下方按钮将执行 <code>sudo systemctl restart digital-girlfriend</code>。重启过程约需 5 秒，期间服务短暂不可用；重启后内存中的解锁令牌失效，需重新输入设置密码。
               </p>
-              <button type="button" className="settings-primary-btn danger" disabled={busy} onClick={() => setConfirmRestart(true)}>
-                <Server size={16} /> 重启服务
+                <button type="button" className="settings-primary-btn danger" disabled={saving !== null} onClick={() => setConfirmRestart(true)}>
+                <Server size={16} /> {saveLabel("restart", "重启服务", "重启中...")}
               </button>
             </section>
           </div>
@@ -409,8 +431,8 @@ export function SettingsPage({
                   <input type="checkbox" checked={llmVision} onChange={(e) => setLlmVision(e.target.checked)} />
                   <span>该模型支持图片识别（多模态）</span>
                 </label>
-                <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveLlm()}>
-                  <Save size={16} /> 保存 LLM 配置
+                <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void saveLlm()}>
+                  <Save size={16} /> {saveLabel("llm", "保存 LLM 配置")}
                 </button>
               </section>
             ) : null}
@@ -429,8 +451,8 @@ export function SettingsPage({
                   <span>API Key（{settings.tts.hasApiKey ? "已配置，留空表示不修改" : "未配置"}）</span>
                   <input type="password" value={ttsApiKey} onChange={(e) => setTtsApiKey(e.target.value)} placeholder={settings.tts.hasApiKey ? "••••••••（留空保持不变）" : "sk-..."} />
                 </label>
-                <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveTts()}>
-                  <Save size={16} /> 保存 TTS 密钥
+                <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void saveTts()}>
+                  <Save size={16} /> {saveLabel("tts", "保存 TTS 密钥")}
                 </button>
               </section>
             ) : null}
@@ -474,8 +496,8 @@ export function SettingsPage({
                 <p className="settings-lock-tip">
                   触发后数字人只会提示「去拍张照，稍等」，期间你发任何消息她都不回复（记为未读）；照片生成后（或接口报错/超时）她再根据等待期累积的消息统一回复一条，模拟「忙完拍照回来再看未读」的真实场景。
                 </p>
-                <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveRh()}>
-                  <Save size={16} /> 保存生图设置
+                <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void saveRh()}>
+                  <Save size={16} /> {saveLabel("rh", "保存生图设置")}
                 </button>
               </section>
             ) : null}
@@ -506,11 +528,11 @@ export function SettingsPage({
                   </label>
                 ))}
                 <div className="settings-btn-row">
-                  <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void savePrompts()}>
-                    <Save size={16} /> 保存提示词
+                  <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void savePrompts()}>
+                    <Save size={16} /> {saveLabel("prompts", "保存提示词")}
                   </button>
-                  <button type="button" className="ghost-btn danger" disabled={busy} onClick={() => setConfirmReset(true)}>
-                    <RefreshCw size={14} /> 恢复默认
+                  <button type="button" className="ghost-btn danger" disabled={saving !== null} onClick={() => setConfirmReset(true)}>
+                    <RefreshCw size={14} /> {saving === "resetPrompts" ? "恢复中..." : savedKey === "resetPrompts" ? "✓ 已恢复" : "恢复默认"}
                   </button>
                 </div>
               </section>
@@ -533,8 +555,8 @@ export function SettingsPage({
                   <span>确认新密码</span>
                   <input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} />
                 </label>
-                <button type="button" className="settings-primary-btn" disabled={busy || !oldPwd || !newPwd} onClick={() => void doChangePassword()}>
-                  <KeyRound size={16} /> 修改密码
+                <button type="button" className="settings-primary-btn" disabled={saving !== null || !oldPwd || !newPwd} onClick={() => void doChangePassword()}>
+                  <KeyRound size={16} /> {saveLabel("password", "修改密码")}
                 </button>
                 <p className="settings-lock-tip">说明：密码由后端加盐哈希存储与校验，改密后所有已解锁的会话立即失效；解锁令牌只存内存，刷新页面即需重新输入。</p>
               </section>
@@ -567,6 +589,12 @@ export function SettingsPage({
         }}
         onCancel={() => setConfirmRestart(false)}
       />
+
+      {notice ? (
+        <div className={`settings-toast ${noticeType}`} role="status">
+          {notice}
+        </div>
+      ) : null}
     </div>
   );
 }

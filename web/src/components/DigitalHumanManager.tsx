@@ -668,14 +668,15 @@ function CharacterForm({
 // ============ 卡片式管理主页 ============
 export function DigitalHumanManager({
   characters,
-  onCharactersChange
+  onCharactersChange,
+  notify
 }: {
   characters: DigitalHuman[];
   onCharactersChange: (next: DigitalHuman[]) => void;
+  notify?: (msg: string, type?: "success" | "error" | "info") => void;
 }) {
   const [view, setView] = useState<"grid" | "create" | "edit">("grid");
   const [editing, setEditing] = useState<DigitalHuman | null>(null);
-  const [status, setStatus] = useState("");
 
   // 统一确认弹窗：待删除 / 待清除记忆的数字人 + 弹窗内按钮 loading
   const [pendingDelete, setPendingDelete] = useState<DigitalHuman | null>(null);
@@ -684,23 +685,20 @@ export function DigitalHumanManager({
 
   const openCreate = () => {
     setEditing(null);
-    setStatus("");
     setView("create");
   };
   const openEdit = (c: DigitalHuman) => {
     setEditing(c);
-    setStatus("");
     setView("edit");
   };
   const back = () => {
     setView("grid");
     setEditing(null);
-    setStatus("");
   };
 
-  // 创建/编辑成功后：在列表页持久展示成功提示（不立即清空），并切回列表
+  // 创建/编辑成功后：统一吐司提示（不依赖表单卸载），并切回列表
   const handleSaved = (msg: string) => {
-    setStatus(msg);
+    notify?.(msg, "success");
     setEditing(null);
     setView("grid");
   };
@@ -720,7 +718,7 @@ export function DigitalHumanManager({
 
   const askDelete = (c: DigitalHuman) => {
     if (characters.length <= 1) {
-      setStatus("至少保留一个数字人，不能全部删除");
+      notify?.("至少保留一个数字人，不能全部删除", "error");
       return;
     }
     setPendingDelete(c);
@@ -733,9 +731,9 @@ export function DigitalHumanManager({
     try {
       await deleteDigitalHuman(c.id);
       onCharactersChange(characters.filter((x) => x.id !== c.id));
-      setStatus(`已删除「${c.name}」`);
+      notify?.(`已删除「${c.name}」`, "success");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "删除失败");
+      notify?.(error instanceof Error ? error.message : "删除失败", "error");
     } finally {
       setConfirmBusy(false);
       setPendingDelete(null);
@@ -752,9 +750,9 @@ export function DigitalHumanManager({
     setConfirmBusy(true);
     try {
       await deleteUserMemory(c.id);
-      setStatus(`已清除「${c.name}」的记忆`);
+      notify?.(`已清除「${c.name}」的记忆`, "success");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "清除记忆失败");
+      notify?.(error instanceof Error ? error.message : "清除记忆失败", "error");
     } finally {
       setConfirmBusy(false);
       setPendingClear(null);
@@ -779,8 +777,6 @@ export function DigitalHumanManager({
           <Plus size={16} /> 新增数字人
         </button>
       </div>
-
-      {status ? <p className="settings-notice">{status}</p> : null}
 
       <div className="dh-grid">
         {characters.map((c) => {

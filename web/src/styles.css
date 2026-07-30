@@ -2275,6 +2275,33 @@ select {
   font-size: 13px;
 }
 
+/* 统一保存/操作反馈吐司：固定底部居中，按类型三色区分，不随页面滚动丢失 */
+.settings-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1300;
+  margin: 0;
+  padding: 12px 22px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  max-width: 84vw;
+  text-align: center;
+  animation: toast-in 0.22s ease;
+}
+.settings-toast.success { background: linear-gradient(120deg, #28c76f, #1faa5b); }
+.settings-toast.error { background: linear-gradient(120deg, #ff5b6e, #ff7a5b); }
+.settings-toast.info { background: linear-gradient(120deg, #8f5bff, #c05bff); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 /* 系统设置改为「整页」形态：不再是小弹框，操作区域尽量铺满视口 */
 .settings-card {
   width: 100%;
