@@ -25,6 +25,7 @@ import {
   updateDigitalHuman,
   uploadAvatarFile
 } from "../services/api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // ============ 常量（从 ChatPanel 迁移） ============
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
@@ -676,6 +677,11 @@ export function DigitalHumanManager({
   const [editing, setEditing] = useState<DigitalHuman | null>(null);
   const [status, setStatus] = useState("");
 
+  // 统一确认弹窗：待删除 / 待清除记忆的数字人 + 弹窗内按钮 loading
+  const [pendingDelete, setPendingDelete] = useState<DigitalHuman | null>(null);
+  const [pendingClear, setPendingClear] = useState<DigitalHuman | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
   const openCreate = () => {
     setEditing(null);
     setStatus("");
@@ -712,32 +718,46 @@ export function DigitalHumanManager({
     return human;
   };
 
-  const handleDelete = async (c: DigitalHuman) => {
+  const askDelete = (c: DigitalHuman) => {
     if (characters.length <= 1) {
       setStatus("至少保留一个数字人，不能全部删除");
       return;
     }
-    if (typeof window !== "undefined" && !window.confirm(`确定删除「${c.name}」吗？删除后不可恢复。`)) {
-      return;
-    }
+    setPendingDelete(c);
+  };
+
+  const confirmDelete = async () => {
+    const c = pendingDelete;
+    if (!c) return;
+    setConfirmBusy(true);
     try {
       await deleteDigitalHuman(c.id);
       onCharactersChange(characters.filter((x) => x.id !== c.id));
       setStatus(`已删除「${c.name}」`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "删除失败");
+    } finally {
+      setConfirmBusy(false);
+      setPendingDelete(null);
     }
   };
 
-  const handleClearMemory = async (c: DigitalHuman) => {
-    if (typeof window !== "undefined" && !window.confirm(`确定清除「${c.name}」的全部记忆吗？\n将清空长期记忆（含你配置的显示名/禁忌/偏好等），清空后不可恢复，但数字人本身会保留。`)) {
-      return;
-    }
+  const askClearMemory = (c: DigitalHuman) => {
+    setPendingClear(c);
+  };
+
+  const confirmClearMemory = async () => {
+    const c = pendingClear;
+    if (!c) return;
+    setConfirmBusy(true);
     try {
       await deleteUserMemory(c.id);
       setStatus(`已清除「${c.name}」的记忆`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "清除记忆失败");
+    } finally {
+      setConfirmBusy(false);
+      setPendingClear(null);
     }
   };
 
@@ -789,14 +809,14 @@ export function DigitalHumanManager({
                 <button type="button" className="dh-action edit" onClick={() => openEdit(c)}>
                   <Pencil size={14} /> 编辑
                 </button>
-                <button type="button" className="dh-action memory" onClick={() => void handleClearMemory(c)}>
+                <button type="button" className="dh-action memory" onClick={() => askClearMemory(c)}>
                   <Brain size={14} /> 清除记忆
                 </button>
                 <button
                   type="button"
                   className="dh-action danger"
                   disabled={characters.length <= 1}
-                  onClick={() => void handleDelete(c)}
+                  onClick={() => askDelete(c)}
                 >
                   <Trash2 size={14} /> 删除
                 </button>
@@ -809,6 +829,27 @@ export function DigitalHumanManager({
       {characters.length === 0 ? (
         <p className="dh-empty">还没有数字人，点击右上角「新增数字人」开始创建。</p>
       ) : null}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="删除数字人"
+        message={`确定删除「${pendingDelete?.name}」吗？\n删除后不可恢复。`}
+        confirmText="删除"
+        danger
+        busy={confirmBusy}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
+      <ConfirmDialog
+        open={!!pendingClear}
+        title="清除记忆"
+        message={`确定清除「${pendingClear?.name}」的全部记忆吗？\n将清空长期记忆（含你配置的显示名/禁忌/偏好等），清空后不可恢复，但数字人本身会保留。`}
+        confirmText="清除记忆"
+        danger
+        busy={confirmBusy}
+        onConfirm={confirmClearMemory}
+        onCancel={() => setPendingClear(null)}
+      />
     </div>
   );
 }

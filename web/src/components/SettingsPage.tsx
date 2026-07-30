@@ -1,6 +1,7 @@
 import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, Server, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DigitalHumanManager } from "./DigitalHumanManager";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
   DigitalHuman,
   PromptSettings,
@@ -67,6 +68,8 @@ export function SettingsPage({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
 
   // LLM 表单
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
@@ -187,7 +190,6 @@ export function SettingsPage({
 
   const doResetPrompts = () =>
     guard(async () => {
-      if (!window.confirm("确认恢复所有提示词为默认值？你的自定义修改将被清除。")) return;
       const data = await resetPromptSettings();
       applySettings(data);
       flash("提示词已恢复默认");
@@ -195,12 +197,6 @@ export function SettingsPage({
 
   const doRestartService = () =>
     guard(async () => {
-      if (
-        !window.confirm(
-          "确认重启后端服务？重启期间服务会短暂中断（约 5 秒），重启后需重新输入设置密码。\n修改数字人 Telegram 专属 bot Token 后必须重启才能生效。"
-        )
-      )
-        return;
       const data = await restartService();
       flash(data.message || "重启指令已下发");
     });
@@ -335,7 +331,7 @@ export function SettingsPage({
               <p className="settings-lock-tip">
                 点击下方按钮将执行 <code>sudo systemctl restart digital-girlfriend</code>。重启过程约需 5 秒，期间服务短暂不可用；重启后内存中的解锁令牌失效，需重新输入设置密码。
               </p>
-              <button type="button" className="settings-primary-btn danger" disabled={busy} onClick={() => void doRestartService()}>
+              <button type="button" className="settings-primary-btn danger" disabled={busy} onClick={() => setConfirmRestart(true)}>
                 <Server size={16} /> 重启服务
               </button>
             </section>
@@ -438,7 +434,7 @@ export function SettingsPage({
                   <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void savePrompts()}>
                     <Save size={16} /> 保存提示词
                   </button>
-                  <button type="button" className="ghost-btn danger" disabled={busy} onClick={() => void doResetPrompts()}>
+                  <button type="button" className="ghost-btn danger" disabled={busy} onClick={() => setConfirmReset(true)}>
                     <RefreshCw size={14} /> 恢复默认
                   </button>
                 </div>
@@ -471,6 +467,31 @@ export function SettingsPage({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        title="恢复默认提示词"
+        message={"确认恢复所有提示词为默认值？\n你的自定义修改将被清除，且不可撤销。"}
+        confirmText="恢复默认"
+        danger
+        onConfirm={() => {
+          setConfirmReset(false);
+          void doResetPrompts();
+        }}
+        onCancel={() => setConfirmReset(false)}
+      />
+      <ConfirmDialog
+        open={confirmRestart}
+        title="重启后端服务"
+        message={"确认重启后端服务？\n重启期间服务会短暂中断（约 5 秒），重启后需重新输入设置密码。\n修改数字人 Telegram 专属 bot Token 后必须重启才能生效。"}
+        confirmText="重启服务"
+        danger
+        onConfirm={() => {
+          setConfirmRestart(false);
+          void doRestartService();
+        }}
+        onCancel={() => setConfirmRestart(false)}
+      />
     </div>
   );
 }
