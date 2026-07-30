@@ -1102,7 +1102,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         photoPending.add(sid);
         // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
         await recordUnread(sid, text);
-        await ctx.reply("📷 姐姐去拍张照，稍等一下下哦~");
+        await ctx.reply("📷 好的，那我去拍张照，稍等一下下哦~");
         // 异步执行，不阻塞；等待期内的用户消息由 photoPending 拦截为「未读」
         void runPhotoFlow(ctx, character, sid).catch((err) => {
           console.error("[拍照] 流程异常:", err);
