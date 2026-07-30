@@ -6,7 +6,7 @@ import dns from "node:dns";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api, RawApi } from "grammy";
 
 import { runChat, generateMemoryForSession } from "../core/chat";
 import {
@@ -190,7 +190,7 @@ async function oggToWavBase64(oggPath: string): Promise<{ base64: string; mime: 
 // 纯 API 版「文本 + 可选语音」发送：供交互聊天（ctx 包裹）与主动推送（无 ctx）共用。
 // voiceEnabled=false 时只发文字，不消耗 TTS 额度（主动推送默认关闭以省额度）。
 async function sendTextWithOptionalVoice(
-  api: Api<BotContext>,
+  api: Api<RawApi>,
   chatId: number,
   text: string,
   character: DigitalHumanConfig,

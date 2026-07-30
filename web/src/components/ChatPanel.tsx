@@ -868,6 +868,7 @@ interface NewCharacterForm {
     enabled: boolean;
     timePoints: string[];
     mode: "always" | "smart";
+    voiceEnabled?: boolean;
   };
 }
 
@@ -1116,7 +1117,7 @@ export function ChatPanel({
     personalityTagline: "",
     relationshipMode: "sweet",
     telegramBotToken: "",
-    proactive: { enabled: false, timePoints: [], mode: "always" }
+    proactive: { enabled: false, timePoints: [], mode: "always", voiceEnabled: false }
   });
   const [editForm, setEditForm] = useState({
     name: "",
