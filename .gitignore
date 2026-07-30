@@ -1,0 +1,24 @@
+.DS_Store
+node_modules
+dist
+build
+.env
+.env.local
+.turbo
+pnpm-lock.yaml
+
+# 运行时数据 / 个人配置（含密钥，勿提交）
+server/.env
+*.bak
+server/src/data/sessions/
+server/src/data/user-memories/
+server/data/audio/
+server/data/avatars/
+
+# 运行时密钥文件（自动生成，含 API Key / 设置密码，勿提交）
+server/src/data/system-config.json
+server/src/data/settings-auth.json
+server/src/data/owner.json
+
+# 内部交接文档（非源码，不入库）
+HANDOFF_HERMES.md

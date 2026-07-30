@@ -1,0 +1,22 @@
+{
+  "name": "@dg/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:ios": "npm run build --workspace @dg/web",
+    "sync:ios": "if [ ! -d ios ]; then echo \"ios 平台未初始化。请先执行: npm run init:ios\"; exit 1; fi; if [ ! -x \"$(command -v xcodebuild 2>/dev/null || echo none)\" ]; then echo \"未检测到 xcodebuild，需先安装完整 Xcode 并确保命令可用。\"; exit 1; fi; if command -v xcode-select >/dev/null && xcode-select -p | grep -q \"/Library/Developer/CommandLineTools\"; then echo \"当前 xcode-select 指向命令行工具，请切换为 Xcode：sudo xcode-select -s /Applications/Xcode.app/Contents/Developer\"; exit 1; fi; if [ ! -x \"$(command -v pod 2>/dev/null || echo none)\" ]; then echo \"未检测到 CocoaPods（pod），请先安装: sudo gem install cocoapods\"; exit 1; fi; npx cap sync ios",
+    "build:ios": "npm run prepare:ios; if [ ! -f ios/App/Podfile ]; then echo \"未发现 iOS Podfile（当前 ios 目录可能为未完成状态）。请执行 npm run rebuild:ios 进行安全重建。\"; exit 1; else npm run sync:ios; fi",
+    "rebuild:ios": "rm -rf ios && npx cap add ios && npm run sync:ios",
+    "doctor:ios": "if ! command -v xcode-select >/dev/null; then echo \"未安装 Xcode 命令行工具。\"; exit 1; fi; echo \"xcode-select:\" $(xcode-select -p 2>/dev/null || echo 'not set'); if xcode-select -p | grep -q \"/Library/Developer/CommandLineTools\"; then echo \"xcode-select 当前指向 CommandLineTools。请切换：sudo xcode-select -s /Applications/Xcode.app/Contents/Developer\"; fi; if ! command -v xcodebuild >/dev/null; then echo \"未检测到 xcodebuild\"; else xcodebuild -version | head -n 1; fi; if ! command -v pod >/dev/null; then echo \"未检测到 CocoaPods（pod）\"; else pod --version | head -n 1; fi; if [ -d ios ] && [ -f ios/App/Podfile ]; then echo \"iOS 工程检测：OK（Podfile 存在）\"; elif [ -d ios ]; then echo \"iOS 目录存在但缺少 Podfile，建议执行 npm run rebuild:ios\"; fi",
+    "open:ios": "npx cap open ios",
+    "build": "npm run prepare:ios",
+    "init:ios": "npx cap add ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@dg/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && node ../scripts/copy-pages-fallback.mjs",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^8.16.5",
+    "lucide-react": "^0.418.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.2",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "18.3.5",
+    "@types/three": "^0.170.0",
+    "eslint": "^9.8.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  }
+}

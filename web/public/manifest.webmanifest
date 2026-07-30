@@ -1,0 +1,30 @@
+{
+  "name": "AI伴聊",
+  "short_name": "AI伴聊",
+  "description": "数字人陪伴平台，支持网站、小程序与 iOS 同步体验",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#151413",
+  "theme_color": "#151413",
+  "icons": [
+    {
+      "src": "icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/app-icon-180.svg",
+      "sizes": "180x180",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/app-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
