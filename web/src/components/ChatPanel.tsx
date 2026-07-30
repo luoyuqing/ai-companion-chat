@@ -1854,61 +1854,16 @@ export function ChatPanel({
           ) : null}
           </section>
 
-          <section className="memory-card">
-          <div className="memory-title">
-            <Brain size={16} />
-            <h3>长期记忆</h3>
-          </div>
-          <label>我是谁</label>
-          <input
-            value={userMemory.displayName}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, displayName: e.target.value }))}
-            placeholder="例如：林，做科研和产品"
-          />
-          <label>希望她怎么称呼我</label>
-          <input
-            value={userMemory.preferredName}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, preferredName: e.target.value }))}
-            placeholder="例如：哥哥 / 阿林 / 亲爱的"
-          />
-          <label>聊天偏好</label>
-          <textarea
-            rows={2}
-            value={userMemory.preferences}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, preferences: e.target.value }))}
-            placeholder="例如：语气自然一点，开心时可以撒娇，压力大时先安慰"
-          />
-          <label>重要事实</label>
-          <textarea
-            rows={2}
-            value={userMemory.importantFacts}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, importantFacts: e.target.value }))}
-            placeholder="例如：最近在做 AI伴聊 项目、经常晚上工作"
-          />
-          <label>聊天禁忌或边界</label>
-          <textarea
-            rows={2}
-            value={userMemory.boundaries}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, boundaries: e.target.value }))}
-            placeholder="例如：不要说教；不喜欢机械式客服语气"
-          />
-          <label>关系备注</label>
-          <textarea
-            rows={2}
-            value={userMemory.relationshipNotes}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, relationshipNotes: e.target.value }))}
-            placeholder="例如：关系节奏偏暧昧、直接、陪伴感强"
-          />
-          <div className="memory-actions">
-            <button type="button" onClick={saveUserMemory}>
-              <Save size={15} />
-              保存记忆
-            </button>
-            <button type="button" className="secondary-btn" onClick={clearUserMemory}>
-              清空
-            </button>
-          </div>
-          {memoryStatus ? <p className="memory-status">{memoryStatus}</p> : null}
+          <section className="memory-card memory-readonly">
+            <div className="memory-title">
+              <Brain size={16} />
+              <h3>关系备注</h3>
+            </div>
+            {userMemory.relationshipNotes?.trim() ? (
+              <p className="memory-readonly-text">{userMemory.relationshipNotes}</p>
+            ) : (
+              <p className="memory-readonly-empty">尚未设置关系备注。前往「设置 → 数字人管理」编辑该数字人，可配置「关于你」与「关系记忆」。</p>
+            )}
           </section>
         </details>
       </section>

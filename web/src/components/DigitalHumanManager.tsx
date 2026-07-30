@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   Brain,
   Image as ImageIcon,
@@ -15,10 +15,13 @@ import {
   Emotion,
   EmotionProfile,
   MimoAudioModel,
+  UserMemory,
   createDigitalHuman,
   deleteDigitalHuman,
   deleteUserMemory,
+  getUserMemory,
   resolveMediaUrl,
+  saveUserMemory,
   updateDigitalHuman,
   uploadAvatarFile,
   uploadModelFile
@@ -27,6 +30,16 @@ import {
 // ============ 常量（从 ChatPanel 迁移） ============
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
 const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/lina-original.jpg`;
+
+// 长期记忆（按角色独立）；编辑数字人时加载并随表单保存。
+const EMPTY_MEMORY: UserMemory = {
+  displayName: "",
+  preferredName: "",
+  preferences: "",
+  importantFacts: "",
+  boundaries: "",
+  relationshipNotes: ""
+};
 
 // MiMo mimo-v2.5-tts 官方可选音色
 const MIMO_VOICE_OPTIONS: Array<{ id: string; label: string }> = [
@@ -224,7 +237,7 @@ function CharacterForm({
 }: {
   mode: "create" | "edit";
   initial?: DigitalHuman;
-  onSubmit: (payload: CreateHumanRequest) => Promise<void>;
+  onSubmit: (payload: CreateHumanRequest) => Promise<DigitalHuman>;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<NewCharacterForm>(() => (initial ? fromCharacter(initial) : defaultForm()));
@@ -232,6 +245,21 @@ function CharacterForm({
   const [submitting, setSubmitting] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [modelUploading, setModelUploading] = useState(false);
+  const [memory, setMemory] = useState<UserMemory>(() => ({ ...EMPTY_MEMORY }));
+
+  useEffect(() => {
+    let cancelled = false;
+    if (mode === "edit" && initial?.id) {
+      getUserMemory(initial.id)
+        .then((m) => {
+          if (!cancelled) setMemory(m);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, initial?.id]);
 
   const handleAvatarFile = async (fileList: FileList | null) => {
     const file = fileList?.[0];
@@ -329,8 +357,24 @@ function CharacterForm({
     setSubmitting(true);
     setStatus("");
     try {
-      await onSubmit(payload);
+      const saved = await onSubmit(payload);
+      const hasMemory = Boolean(
+        memory.displayName ||
+          memory.preferredName ||
+          memory.preferences ||
+          memory.importantFacts ||
+          memory.boundaries ||
+          memory.relationshipNotes
+      );
+      if (hasMemory) {
+        try {
+          await saveUserMemory(saved.id, memory);
+        } catch {
+          // 记忆保存失败不影响数字人本身的创建/更新
+        }
+      }
       setStatus(mode === "create" ? "已创建 ✓" : "已保存 ✓");
+      onCancel();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "保存失败，请重试");
     } finally {
@@ -592,6 +636,71 @@ function CharacterForm({
           </>
         ) : null}
 
+        {/* 关系与记忆：按角色独立配置（A 关系状态 / B 关于你 / C 关系记忆） */}
+        <fieldset className="dh-memory-group">
+          <legend>关系备注（A · 关系状态）</legend>
+          <label className="field">
+            <span className="field-label">关系备注</span>
+            <textarea
+              rows={2}
+              value={memory.relationshipNotes || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, relationshipNotes: e.target.value }))}
+              placeholder="例如：关系节奏偏暧昧、直接、陪伴感强"
+            />
+          </label>
+        </fieldset>
+
+        <fieldset className="dh-memory-group">
+          <legend>关于你（B · 玩家设定，可按角色不同）</legend>
+          <label className="field">
+            <span className="field-label">我是谁 / 假身份</span>
+            <input
+              value={memory.displayName || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, displayName: e.target.value }))}
+              placeholder="例如：林，做科研和产品（可填假身份）"
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">希望她怎么称呼我</span>
+            <input
+              value={memory.preferredName || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, preferredName: e.target.value }))}
+              placeholder="例如：哥哥 / 阿林 / 亲爱的"
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">聊天偏好</span>
+            <textarea
+              rows={2}
+              value={memory.preferences || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, preferences: e.target.value }))}
+              placeholder="例如：语气自然一点，开心时可以撒娇，压力大时先安慰"
+            />
+          </label>
+        </fieldset>
+
+        <fieldset className="dh-memory-group">
+          <legend>你们的关系记忆（C · 按角色独立）</legend>
+          <label className="field">
+            <span className="field-label">重要事实</span>
+            <textarea
+              rows={2}
+              value={memory.importantFacts || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, importantFacts: e.target.value }))}
+              placeholder="例如：最近在做 AI伴聊 项目、经常晚上工作"
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">聊天禁忌或边界</span>
+            <textarea
+              rows={2}
+              value={memory.boundaries || ""}
+              onChange={(e) => setMemory((p) => ({ ...p, boundaries: e.target.value }))}
+              placeholder="例如：不要说教；不喜欢机械式客服语气"
+            />
+          </label>
+        </fieldset>
+
         {status ? <small className="field-hint">{status}</small> : null}
         <div className="dh-form-actions">
           <button type="button" className="ghost-btn" onClick={onCancel}>取消</button>
@@ -632,17 +741,17 @@ export function DigitalHumanManager({
     setStatus("");
   };
 
-  const handleCreate = async (payload: CreateHumanRequest) => {
+  const handleCreate = async (payload: CreateHumanRequest): Promise<DigitalHuman> => {
     const created = await createDigitalHuman(payload);
     onCharactersChange([...characters, created.human]);
-    back();
+    return created.human;
   };
 
-  const handleEdit = async (payload: CreateHumanRequest) => {
-    if (!editing) return;
+  const handleEdit = async (payload: CreateHumanRequest): Promise<DigitalHuman> => {
+    if (!editing) throw new Error("缺少编辑对象");
     const { human } = await updateDigitalHuman(editing.id, payload);
     onCharactersChange(characters.map((c) => (c.id === human.id ? human : c)));
-    back();
+    return human;
   };
 
   const handleDelete = async (c: DigitalHuman) => {
