@@ -58,7 +58,7 @@ import { startProactiveScheduler } from "./telegram/proactive";
 import { getUserMemory, saveUserMemory, deleteUserMemory } from "./services/userMemory";
 import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
 import { getPromptConfig } from "./core/prompts";
-import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
+import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
 
 // 规范化主动推送配置：限制最多 3 个时间点，模式只能是 always/smart。
 function normalizeProactive(input: unknown): ProactiveConfig | undefined {
@@ -92,6 +92,8 @@ app.get("/api/digital-humans", async (_req, res) => {
 // ---------- 系统设置二次密码验证 ----------
 // 登录接口本身免鉴权（声明在中间件之前）；其余 /api/settings* 一律需要 x-settings-token
 app.post("/api/settings/auth", settingsAuthLogin);
+// 首次初始化接口也免鉴权（声明在中间件之前），仅当设置密码尚未设置时可用
+app.post("/api/settings/auth/init", settingsAuthInit);
 app.use("/api/settings", requireSettingsAuth);
 app.post("/api/settings/auth/logout", settingsAuthLogout);
 app.post("/api/settings/auth/password", settingsAuthChangePassword);

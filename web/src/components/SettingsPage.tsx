@@ -62,6 +62,9 @@ export function SettingsPage({
   const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [needInit, setNeedInit] = useState(false); // 首次部署：后端尚未设置密码
+  const [initPwd, setInitPwd] = useState("");
+  const [initPwd2, setInitPwd2] = useState("");
 
   const [tab, setTab] = useState<Tab>("humans");
   const [settings, setSettings] = useState<SystemSettings | null>(null);
@@ -139,11 +142,42 @@ export function SettingsPage({
       setPassword("");
       setUnlocked(true);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : "验证失败");
+      const msg = err instanceof Error ? err.message : "验证失败";
+      // 后端 503：设置密码尚未初始化 → 切换到首次设密表单
+      if (msg.includes("未初始化")) {
+        setNeedInit(true);
+      } else {
+        setAuthError(msg);
+      }
     } finally {
       setAuthBusy(false);
     }
   };
+
+  const submitInit = async () => {
+    if (authBusy) return;
+    if (initPwd.trim().length < 4) {
+      setAuthError("密码至少 4 位");
+      return;
+    }
+    if (initPwd !== initPwd2) {
+      setAuthError("两次输入的密码不一致");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await settingsInit(initPwd.trim());
+      setInitPwd("");
+      setInitPwd2("");
+      setNeedInit(false);
+      setUnlocked(true);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "设置失败");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
 
   const flash = (text: string, type: "success" | "error" | "info" = "info") => {
     setNotice(text);
@@ -308,28 +342,68 @@ export function SettingsPage({
           <div className="settings-lock-icon">
             <Lock size={28} />
           </div>
-          <h2>系统设置已锁定</h2>
-          <p className="settings-lock-tip">请输入设置密码。密码由服务器校验，未验证前无法读取任何系统配置。</p>
-          <div className="settings-lock-form">
-            <div className="settings-pwd-wrap">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                autoFocus
-                placeholder="设置密码"
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void submitPassword();
-                }}
-              />
-              <button type="button" className="settings-pwd-eye" onClick={() => setShowPassword((v) => !v)} aria-label="显示/隐藏密码">
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-            <button type="button" className="settings-primary-btn" disabled={authBusy || !password.trim()} onClick={() => void submitPassword()}>
-              <ShieldCheck size={16} /> {authBusy ? "验证中..." : "解锁"}
-            </button>
-          </div>
+          {needInit ? (
+            <>
+              <h2>设置访问密码</h2>
+              <p className="settings-lock-tip">这是首次部署，请为系统设置页设置一个访问密码（至少 4 位）。设置后其他接手者都用此密码进入设置页。</p>
+              <div className="settings-lock-form">
+                <div className="settings-pwd-wrap">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={initPwd}
+                    autoFocus
+                    placeholder="新密码（至少 4 位）"
+                    onChange={(e) => setInitPwd(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitInit();
+                    }}
+                  />
+                  <button type="button" className="settings-pwd-eye" onClick={() => setShowPassword((v) => !v)} aria-label="显示/隐藏密码">
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <div className="settings-pwd-wrap">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={initPwd2}
+                    placeholder="再次确认密码"
+                    onChange={(e) => setInitPwd2(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitInit();
+                    }}
+                  />
+                </div>
+                <button type="button" className="settings-primary-btn" disabled={authBusy || !initPwd.trim() || !initPwd2.trim()} onClick={() => void submitInit()}>
+                  <ShieldCheck size={16} /> {authBusy ? "设置中..." : "设置密码"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>系统设置已锁定</h2>
+              <p className="settings-lock-tip">请输入设置密码。密码由服务器校验，未验证前无法读取任何系统配置。</p>
+              <div className="settings-lock-form">
+                <div className="settings-pwd-wrap">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    autoFocus
+                    placeholder="设置密码"
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitPassword();
+                    }}
+                  />
+                  <button type="button" className="settings-pwd-eye" onClick={() => setShowPassword((v) => !v)} aria-label="显示/隐藏密码">
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <button type="button" className="settings-primary-btn" disabled={authBusy || !password.trim()} onClick={() => void submitPassword()}>
+                  <ShieldCheck size={16} /> {authBusy ? "验证中..." : "解锁"}
+                </button>
+              </div>
+            </>
+          )}
           {authError ? <p className="settings-error">{authError}</p> : null}
         </div>
       </div>

@@ -1128,6 +1128,18 @@ export async function settingsLogin(password: string): Promise<void> {
   settingsToken = data.token;
 }
 
+/**
+ * 首次初始化设置密码：POST /api/settings/auth/init。
+ * 仅当后端尚未设置密码时可用；成功后直接写入令牌，前端无需再次登录。
+ */
+export async function settingsInit(password: string): Promise<void> {
+  const data = await settingsRequest<{ token: string }>("/api/settings/auth/init", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+  settingsToken = data.token;
+}
+
 export async function settingsLogout(): Promise<void> {
   if (!settingsToken) return;
   await settingsRequest<{ ok: boolean }>("/api/settings/auth/logout", { method: "POST", body: "{}" });

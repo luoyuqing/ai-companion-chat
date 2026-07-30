@@ -169,3 +169,24 @@ export function settingsAuthChangePassword(req: Request, res: Response): void {
   tokens.clear(); // 改密后所有已发令牌作废
   res.json({ ok: true });
 }
+
+/**
+ * 首次初始化：POST /api/settings/auth/init { password }
+ * 仅当 settings-auth.json 尚不存在时可调用（部署后第一次打开设置页）。
+ * 成功后直接签发令牌，前端无需二次登录即可进入设置页。
+ * 已初始化则返回 409，防止被重复覆盖密码。
+ */
+export function settingsAuthInit(req: Request, res: Response): void {
+  if (loadStore()) {
+    res.status(409).json({ error: "设置密码已初始化，无需重复设置" });
+    return;
+  }
+  const password = String((req.body as { password?: unknown })?.password ?? "").trim();
+  if (password.length < 4) {
+    res.status(400).json({ error: "密码长度至少 4 位" });
+    return;
+  }
+  setPassword(password);
+  const token = issueToken();
+  res.json({ token, expiresInMs: TOKEN_TTL_MS });
+}
