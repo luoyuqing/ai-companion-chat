@@ -1,242 +1,581 @@
-# AI伴聊 · AI Companion Chat
+# AI 伴聊数字人平台（AI Companion Chat，原名「数字女友」）
 
-> 一个可自托管的 AI 陪伴聊天平台：**一套后端 API，覆盖 Web / 微信小程序 / iOS / Telegram 四端**。
-> 支持多数字人管理、跨端共享记忆、全局提示词编排、多语音引擎，以及「一角色一机器人」的 Telegram 陪伴体验。
+> 项目已于 2026-07-30 由「数字女友」正式更名为 **AI 伴聊（AI Companion Chat）**。以下「平台最新特性」为近期上线的重要能力，旧版基础能力见下方「目标能力」段落。
 
-**English:** AI Companion Chat is a self-hostable, multi-platform AI companion platform. One backend serves a React web app, a WeChat mini-program, an iOS (Capacitor) shell, and Telegram bots. It features multi-character management, cross-device persistent memory, editable system prompts, pluggable LLM/TTS providers, and per-character Telegram bots.
+## 平台最新特性（2026-07 更新）
 
----
+### 核心能力一览
 
-## ✨ 功能亮点
+- **多端一致的陪伴体验**：Web / Telegram / 微信小程序 / iOS 共用同一套数字人配置、会话与长期记忆，后端为唯一真源，跨设备无缝衔接。
+- **系统配置网页化**：LLM、TTS、生图（RunningHub）等密钥与参数可直接在「系统设置页」配置，**保存即生效，无需重启服务**（配置经 `saveSystemConfig` 即时刷新内存缓存）。
+- **提示词可配置化**：角色系统提示、禁律（含绝对禁绿帽指令）、输出纪律、语音标签规则、成人规则、场景提示等集中于 `core/prompts.ts` 的 `PROMPT_DEFAULTS`，并可由 `data/system-config.json` 覆盖。
+- **统一对话编排**：`core/chat.ts` 的 `runChat()` 同时服务网页与 Telegram，内置服务端总结式记忆（窗口 12 条 / 12 条首次总结 / 每 16 条重总结）。
+- **Telegram 一角色一机器人**：每个数字人可绑定独立 Telegram Bot Token，私聊独立、互不干扰（`DigitalHumanConfig.telegramBotToken`）。
+- **陪伴场景与回复风格**：`core/scenes.ts` 提供日常 / 约会 / 安慰 / 18+ 亲密 / 睡前等场景，驱动关系风格与情绪预设。
+- **聊天历史服务器单一真源**：会话记录保存在后端（`server/src/data/sessions`，上限 2000 轮），跨浏览器与 Telegram 全量一致；切角色时 `GET /api/session/mem-<characterId>` 加载并合并本地历史。
+- **长期记忆 / 关系后端单一真源**：`server/src/data/user-memories/<id>.json`，经 `GET/PUT/DELETE /api/user-memory/:characterId` 读写，跨端一致（聊天禁忌以记忆为权威主源）。
+- **系统设置页二次密码**：`core/settings-auth.ts` 以加盐 SHA256 存储，Token 内存态 2h 滑动过期，拦截 `/api/settings*`，含防爆破（5 次锁 5 分钟）。
+- **「拍张照」生图（RunningHub）**：Telegram 端消息含触发词（可配，默认「拍张照」）即触发仿真流程——数字人先回提示语、等待期累积未读、照片生成后基于上下文统一回复一条；支持超时配置（默认 120s）、RB 通讯全链路日志、提示词由 LLM 按人设+上下文现编。详见下方「拍张照生图」章节。
+- **设置页反馈优化**：所有保存按钮统一三色 Toast（成功绿 / 失败红 / 提示紫）+「保存中… / ✓ 已保存」按钮状态。
 
-| # | 亮点 | 说明 |
-|---|------|------|
-| 1 | **多端覆盖** | Web（React PWA，可安装到桌面/手机）、微信小程序、iOS（Capacitor 壳）、Telegram 机器人，共用同一套后端 API |
-| 2 | **多数字人管理** | 网页端创建 / 编辑 / 删除数字人，支持头像上传、3D 模型（GLB/GLTF）、情绪图 / 情绪视频，以及按角色独立的音色与机器人 Token |
-| 3 | **跨端共享记忆** | 会话以 `mem:<角色Id>` 存于服务端，换浏览器 / 电脑 / 小程序打开同一角色自动续上；支持「记忆总结模式」压缩长上下文 |
-| 4 | **全局提示词可编排** | 人设 / 场景 / 语气 / 记忆总结等模板全局可编辑，存于服务端配置，网页「系统设置 → 提示词」即可改，可一键恢复默认 |
-| 5 | **多语音引擎（MiMo）** | TTS 支持预置音色 / 声音设计（文字描述）/ 声音克隆（音频样本）三种模式，ASR 负责语音输入转写 |
-| 6 | **一角色一机器人** | 每个数字人可绑定独立 Telegram Bot Token，专属机器人只服务该角色，记忆按角色天然隔离 |
-| 7 | **主动关怀推送** | 可配置的定时主动推送（proactive scheduler），经专属机器人向用户发送关怀消息 |
-| 8 | **陪伴场景与语气** | 内置日常陪伴 / 虚拟约会 / 情绪安慰 / 暧昧互动 / 睡前陪伴等场景，以及「一点即聊」的快速互动（抱抱、牵手、耳语、依靠、晚安）；语气风格支持温柔 / 轻声 / 沉稳 |
-| 9 | **设置二次密码** | 系统设置页（LLM / TTS / 提示词 / 安全）带内存级二次密码保护，避免他人误改关键配置 |
-| 10 | **长期用户记忆** | 可保存用户称呼、聊天偏好、重要事实、聊天禁忌与关系备注，作为 `system` 上下文持续影响回复 |
+### 后端服务架构
 
-> 注：亲密 / 暧昧类场景需完成**成年确认**后解锁；未确认时仅提供恋爱暧昧风格，不进入露骨内容。
-
----
-
-## 🧩 技术栈
-
-| 层 | 技术 |
-|----|------|
-| 后端 | Node.js + Express + TypeScript（`tsx` 运行） |
-| 前端 Web | React 18 + Vite + TypeScript，PWA 可安装 |
-| 微信小程序 | 原生小程序源码 |
-| iOS | Capacitor 壳（复用 Web 构建产物） |
-| LLM | OpenAI 兼容协议（默认 OmniRoute / DeepSeek `ds`，可在设置中切换） |
-| 语音 | MiMo TTS / ASR（预置音色 / 声音设计 / 声音克隆） |
-| 机器人 | Telegram（`grammy`） |
-| 包管理 | npm workspaces（也可用 pnpm） |
+- monorepo（pnpm workspace）：`server/`（Express API，运行于 `127.0.0.1:8787`）+ `web/`（React+Vite）+ `wechat-mini/` + `mobile/`（Capacitor）。
+- 生产以 systemd 服务 `digital-girlfriend.service` 运行，`tsx` 启动 `server/src/index.ts`，前置 Nginx 反代。
+- **AI 后端**：走本机 OmniRoute 网关（`OPENAI_BASE_URL=https://3585616.xyz/v1`，`OPENAI_MODEL=ds`）；`DG_UNRESTRICTED_CHAT=true` 开启 18+。
+- **TTS / ASR**：小米 MiMo（`api.xiaomimimo.com/v1`，voice=冰糖）。
+- **Telegram**：Bot 以 polling 模式运行，每个数字人独立 Bot。
 
 ---
 
-## 📂 目录结构
+该仓库用于快速搭建「数字女友」产品的基础形态，目标平台：
+- Web 站点（React + Vite）
+- 微信小程序（标准小程序源码）
+- iOS（Capacitor 壳）
 
-```
-.
-├── server/            # Node + Express 后端 API（:8787）
-│   └── src/
-│       ├── core/      # config / prompts / scenes / settings-auth
-│       ├── services/  # llm / tts / transcription / session / userMemory
-│       ├── telegram/  # bot.ts / proactive.ts（主动推送）
-│       └── data/      # 数字人数据 + 运行时会话/配置（部分 gitignore）
-├── web/               # React + Vite 网站前端（可构建为 PWA）
-├── wechat-mini/       # 微信小程序源码
-├── mobile/            # Capacitor iOS 打包配置
-├── scripts/           # 开发联调 / 发布辅助脚本
-├── deploy.sh          # 部署脚本（⚠️ 见下方「部署」注意事项）
-└── package.json       # npm workspaces 根配置
-```
+目标能力：
+- 多数字人管理（可创建新数字人）
+- AI 对话接口（`/api/chat`）
+- 情绪识别驱动的表情切换
+- 文本回复可选 TTS 语音回放（可单独配置 `OPENAI_TTS_API_KEY`，失败时回退浏览器中文女声）
+- Web 端支持语音输入、自动语音开关、逐条重播，以及温柔 / 轻声 / 沉稳三种浏览器语音节奏
+- 数字人创建与切换（头像/默认情绪同步显示）
+- Web 端支持 GLB/GLTF 3D 模型地址与本地上传，聊天情绪会继续驱动 3D 外层动作
+- Web 端支持陪伴场景切换（日常、约会、安慰、18+ 亲密、睡前），场景会进入下一轮 `system` 上下文并影响静态 fallback / 真实后端回复
+- 18+ 亲密模式需要先完成成年确认；确认后可使用更直接的成年人自愿亲密表达，未确认时仍可恋爱暧昧但不进入露骨内容
+- Web 端内置两张 ComfyUI 本地生成的虚构成年混血人物肖像，2D 模式会以竖幅照片舞台呈现人物，同时保留说话状态和 3D 切换
+- Web 端支持一点即聊的亲密互动：抱抱、牵手、耳语、依靠、晚安；每个动作都会切换对应场景、触发照片动画并直接开始一轮聊天
+- 小程序端创建数字人也会保留 `modelUrl`，并提供 3D/2D 低性能回退状态提示
+- Web / 小程序 / iOS 的同一会话与数字人配置使用同一套 API
+- 支持数字人实时表情图/视频映射（`avatarType=video`）
 
----
+## 目录
 
-## 🏁 快速开始（本地开发）
+- `server/`：Node + Express API 服务
+- `web/`：网站前端
+- `wechat-mini/`：微信小程序源码
+- `mobile/`：Capacitor 打包配置（用于 iOS）
 
-### 环境要求
-- Node.js ≥ 20
-- npm（或 pnpm）
+## 本地启动（开发）
 
-### 1. 安装依赖
+> 网络环境中如果 pnpm 无法安装，请用 npm 管理依赖（示例命令已改用 npm）。
+
 ```bash
+# 安装依赖
 npm install
+
+# 开启后端（另外一个终端）
+cd server && npm install && cp .env.example .env
+npm run dev
+
+# 开启网站
+cd web && npm install
+npm run dev
 ```
 
-### 2. 配置后端
-```bash
-cd server
-cp .env.example .env      # 然后编辑 .env，填入 LLM / TTS / 可选 Telegram 的密钥
-```
-关键变量见下文「配置说明」。
+## GitHub Pages 发布（可直接访问）
 
-### 3. 启动后端
+建议在 GitHub 上新建仓库后，按以下步骤直接发布到 GitHub Pages：
+
+发布成功后，默认访问地址为：
+
+`https://<你的GitHub用户或组织>.github.io/<你的仓库名>/`
+
+1. 在仓库 Settings → Secrets and variables → Actions 中新增环境变量（可选，推荐 Repository variable）：
+   - `VITE_API_URL`（你的后端公网地址，例如 `https://api.xxx.com`）
+2. 保证主分支推送到 `main`。
+3. Push 后 `.github/workflows/gh-pages.yml` 会自动执行：
+   - `npm run build:web`（即 `npm run build --workspace @dg/web`）
+   - 自动上传构建产物并发布到 GitHub Pages（`workflow` 模式）。
+   - workflow 会设置 `VITE_BASE_PATH=/digital-girlfriend/`，保证 GitHub Pages 子目录下的 JS/CSS/图片路径稳定。
+   - 构建会同时生成 `404.html`，用于 GitHub Pages 静态站点的 SPA 路由兜底；直接访问或刷新 `/chat` 等子路径不会落到 GitHub 的默认 404 页。
+
+未配置 `VITE_API_URL` 时，GitHub Pages 会自动启用前端本地静态体验：内置数字人可加载，聊天会用本地流式回复，表情、关系状态和浏览器语音播报仍可使用；用户创建的数字人、当前 3D/2D 模式、每个数字人的聊天记录和关系状态会保存在当前浏览器 `localStorage`，刷新后仍可继续使用。配置公网 API 后会优先使用真实后端。
+
+聊天页左侧支持“长期记忆”：用户可主动保存自己的称呼、聊天偏好、重要事实、聊天禁忌和关系备注。保存后，下一条消息会把这段记忆作为 `system` 上下文发送给静态 fallback 或真实后端，让数字人自然使用这些偏好，而不是每轮重新询问。网页版与微信小程序都已支持这套本地记忆。
+
+聊天页右侧支持“陪伴场景”：可在日常陪伴、虚拟约会、情绪安慰、亲密 18+、睡前陪伴之间切换，也可点击场景快捷话题快速发起对话。场景会同步关系风格和情绪预设，并作为 `system` 上下文影响静态 Pages fallback、流式后端和真实模型回复。亲密 18+ 场景只在用户确认成年后生效。
+
+## ComfyUI 原创人物图
+
+仓库包含可重复生成主人物肖像的 API workflow：
+
+`scripts/comfyui-adult-companion.json`
+
+默认使用 `juggernautXL.safetensors`，正向提示明确角色为 28 岁虚构成年人，负向提示排除未成年、真人明星、裸体和露骨画面。当前内置图及种子记录在 `web/public/assets/avatars/PHOTO_CREDITS.md`。本机 ComfyUI 启动后可提交该 workflow：
+
 ```bash
-cd server
-npm run dev               # tsx watch，默认 http://127.0.0.1:8787
+jq -c '{prompt: .}' scripts/comfyui-adult-companion.json \
+  | curl -X POST http://127.0.0.1:8188/prompt \
+      -H 'Content-Type: application/json' --data-binary @-
 ```
 
-### 4. 启动前端
+静态体验还支持“导出记录 / 导入记录”：导出的 JSON 会包含本机自定义数字人、聊天记录、关系状态、长期记忆、当前会话和 3D/2D 模式；在另一台设备或另一个浏览器导入后会自动刷新并恢复对应体验。该导入只写入项目白名单内的本地键，不会写入任意浏览器存储。微信小程序的“迁移记录”面板使用同一 JSON schema，可通过剪贴板和网页版互相迁移。
+
+本地一键验证（按你要求）：
+
 ```bash
-cd web
+# 安装依赖
 npm install
-npm run dev               # Vite，默认 http://localhost:5173
-```
-打开 `http://localhost:5173/` 即可进入聊天页。Vite 会自动把 API 请求指向同机 `:8787`。
 
-> 一键启动前后端：`npm run dev:all`（根目录脚本，同时拉起 8787 与 5173）。
-
-### 5. 微信小程序 / iOS（可选）
-- 小程序：微信开发者工具导入 `wechat-mini/`，将 `app.js` 中 `globalData.apiBase` 指向你的后端公网地址，并在小程序后台配置 request 合法域名。
-- iOS：见下文「部署 → iOS」。
-
----
-
-## ⚙️ 配置说明（`server/.env`）
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `OPENAI_API_KEY` | LLM 密钥（OpenAI 兼容） | `sk-xxxx` |
-| `OPENAI_BASE_URL` | LLM 接口地址 | `https://3585616.xyz/v1` |
-| `OPENAI_MODEL` | LLM 模型名 | `ds` |
-| `MIMO_API_KEY` | MiMo TTS / ASR 密钥 | `sk-xxxx` |
-| `MIMO_BASE_URL` | MiMo 接口地址 | `https://api.xiaomimimo.com/v1` |
-| `MIMO_TTS_MODEL` | TTS 模型 | `mimo-v2.5-tts` |
-| `MIMO_TTS_VOICE` | 默认预置音色 | `冰糖` |
-| `TTS_PROVIDER` | 语音引擎 | `mimo` |
-| `MIMO_ASR_MODEL` | ASR 模型 | `mimo-v2.5-asr` |
-| `ASR_PROVIDER` | 转写引擎 | `mimo` |
-| `DG_UNRESTRICTED_CHAT` | 是否解除对话内容限制 | `true` / `false` |
-| `PORT` | 后端监听端口 | `8787` |
-| `HOST` | 后端监听地址 | `127.0.0.1` |
-| `TELEGRAM_BOT_TOKEN` | 通用 Telegram Bot Token（留空不启动） | — |
-| `TELEGRAM_WEBHOOK` | 可选 webhook 地址（否则 polling） | — |
-| `ALLOWED_TG_USER_ID` | 允许使用的 TG 用户 ID（留空则首位 `/start` 用户成为主人） | `123456789` |
-
-> LLM / TTS / 提示词等配置也可在网页「系统设置」中运行时修改，无需重启后端；只有 `.env` 里的密钥和 Telegram Bot Token 变更需要重启服务。
-
----
-
-## 🖥️ 系统设置与提示词
-
-网页端进入「系统设置」（需二次密码，仅内存保存，刷新即锁）包含四个分区：
-
-- **LLM**：接口地址 / 密钥 / 模型（可拉取模型清单选择或手填）/ 视觉支持开关
-- **TTS**：语音引擎配置（MiMo 的 baseUrl / 模型为只读展示，仅可配密钥）
-- **提示词**：全局可编辑的人设 / 场景 / 语气 / 记忆总结模板，支持「恢复默认」
-- **安全**：修改设置二次密码
-
-提示词模板存于服务端 `server/src/data/system-config.json`（已 gitignore，含密钥），改完立即生效。
-
----
-
-## 👤 数字人管理
-
-- **创建 / 编辑 / 删除**：网页端操作，头像可上传，支持 GLB/GLTF 3D 模型地址与本地上传、情绪图（`emotionProfile`）与情绪视频（`avatarVideoProfile`）。
-- **按角色独立配置**：每个数字人可单独设置音色（含声音设计 / 克隆）、以及绑定独立 **Telegram Bot Token**（实现「一角色一机器人」）。
-- **数据位置**：预置与覆盖数据在 `server/src/data/{custom-humans,human-overrides,digital-humans}.json`；用户创建的数字人持久化到 `custom-humans.json`。
-
----
-
-## 🔗 跨端记忆
-
-- 每个角色的会话以 `mem:<角色Id>` 为 key 存于服务端 `server/src/data/sessions/mem-<角色Id>.json`。
-- 网页端、小程序端、Telegram 机器人共用同一份记忆（通用 bot 主人与网页端共享 `mem:<id>`，其余授权 TG 用户各自独立）。
-- 支持「记忆总结模式」：将长对话压缩为条目式档案，避免短上下文模型遗忘。
-- `/reset`（机器人）或网页「清空对话」会清空该角色两端记忆。
-
----
-
-## 🤖 Telegram 机器人
-
-- **通用机器人**：通过 `TELEGRAM_BOT_TOKEN` 启动，支持命令
-  `/start /help /list /select /scene /action /style /voice /summary /new /edit /delete /reset /export /import /cancel`，
-  支持文字 / 语音（OGG→WAV→ASR）/ 图片（头像）输入，语音回复经 MP3→OGG/Opus 回传。
-- **专属机器人（一角色一机器人）**：在数字人编辑表单填写 `Telegram Bot Token`，服务启动时会为每个含 Token 的角色拉起独立 bot，只服务该角色、记忆隔离；新增 / 修改 Token 后需重启后端服务。
-- **主动推送**：`server/src/telegram/proactive.ts` 提供定时主动关怀消息能力，经专属机器人下发。
-
----
-
-## 📡 API 概览
-
-常用端点（完整列表见 `server/src/index.ts`）：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/healthz` | 健康检查 |
-| GET | `/api/digital-humans` | 数字人列表 |
-| POST | `/api/digital-humans` | 创建自定义数字人 |
-| DELETE | `/api/digital-humans/:id` | 删除自定义数字人 |
-| POST | `/api/chat` | 非流式对话 |
-| POST | `/api/chat/stream` | SSE 流式对话（返回 `meta`/`chunk`/`emotion`/`done` 事件） |
-| POST | `/api/transcribe` | 语音转写（ASR） |
-| POST | `/api/tts` | 文本转语音（TTS） |
-| GET/PUT | `/api/settings` | 读取 / 更新系统设置（LLM / TTS / 提示词，密钥脱敏返回） |
-| POST | `/api/settings/prompts/reset` | 恢复提示词默认 |
-| GET/DELETE | `/api/session/:id` | 读取 / 清空某角色会话 |
-| POST | `/api/session/:id/import` | 导入记忆 JSON 写回 |
-| POST | `/api/session/:id/summary` | 开启 / 关闭记忆总结 |
-| GET/POST | `/api/user-memory` | 长期用户记忆读取 / 更新 |
-| POST | `/api/models/upload` | 上传 GLB/GLTF 模型 |
-
----
-
-## 🚢 部署
-
-### Web 前端（静态）
-构建后将 `web/dist` 部署到任意静态服务（Nginx / Cloudflare Pages / Vercel）：
-```bash
-npm run build:web        # 等价于 npm run build --workspace @dg/web
-```
-- 设置 `VITE_API_URL` 指向后端公网地址（如 `https://ai.example.com`）；不设置时前端 API 基址自动取当前域名（适用于 Nginx 同机反代）。
-- 网页支持 PWA 安装（需 HTTPS），离线时可打开静态聊天界面并读取本机 `localStorage`。
-
-### 后端（systemd + Nginx 反代）
-```bash
-cd server
-npm install
-cp .env.example .env && vim .env
-npm run build            # 可选：tsc 类型检查
-# 用 tsx 或编译后的 js 以 systemd 服务运行，监听 127.0.0.1:8787
-```
-Nginx 将 `ai.example.com` 的 `/api/`、`/audio/`、`/models/` 等反代到 `127.0.0.1:8787`。
-
-### iOS（Capacitor）
-```bash
-npm run build:ios        # 先构建 Web，再构建 iOS 工程
-npm run sync:ios         # 同步最新 Web 包到 ios/
-npm run open:ios         # 打开 Xcode 打包 .ipa（企业签名 / TestFlight）
-```
-打包前建议设置 `VITE_API_URL=https://你的后端地址`，避免移动端请求到文件 origin。
-
-### ⚠️ 部署脚本注意事项
-仓库根目录 `deploy.sh` 内含 `rm -f /etc/nginx/sites-enabled/*` 与 `rm -rf /var/www/dg/*` 等**破坏性操作**，仅适用于「独占的全新服务器」一键部署。**在已运行其他站点（如 OmniRoute / SillyTavern / 反向代理）的共享服务器上切勿直接运行该脚本**，否则会清掉其他站点。共享服务器请改用定向 SCP 部署：
-```bash
+# 打包网站
 npm run build:web
-scp -r web/dist/* user@host:/var/www/dg/      # 原子切换前端目录
-scp -r server/src user@host:~/dg/server/      # 同步后端源码
-ssh user@host 'sudo systemctl restart digital-girlfriend'
+
+# 本地联调（后端+网站）
+npm run dev:all
 ```
 
+验证 8787 提示页与 5173 页面：
+
+```bash
+curl -I http://127.0.0.1:8787/ | head -n 1
+```
+
+应返回 200，并在页面上看到「请访问 5173」提示；再打开 `http://127.0.0.1:5173/` 能进入聊天页。
+
+## 一键启动（后端 + 网站）
+
+```bash
+npm run dev:all
+```
+
+该命令会同时启动：
+- 后端 API（默认 `http://127.0.0.1:8787`）
+- Web 前端（默认 `http://localhost:5173`）
+
+可通过环境变量改端口：
+
+```bash
+PORT=19010 npm run dev:all
+```
+
+退出可按 `Ctrl + C`，会一并关闭两个进程。
+
+发布前统一配置（建议先执行）：
+
+```bash
+WECHAT_API_BASE=https://你的后端域名 \
+WECHAT_APP_ID=你的小程序AppID \
+IOS_APP_ID=com.yourcompany.digitalgirlfriend \
+npm run setup:platform-config
+```
+
+也可使用 `.env.release` / `.env.release.example` 一次性配置：
+
+```bash
+cp .env.release.example .env.release
+# 编辑 .env.release 后
+npm run setup:release
+```
+
+本地联调（不阻塞占位小程序/AppID）可以先用：
+
+```bash
+DG_ALLOW_PLACEHOLDER_IDS=true npm run setup:release
+DG_ALLOW_PLACEHOLDER_IDS=true npm run verify:ready
+```
+
+`setup:release` 会顺带跑三端安装能力检查（PWA 安装资产、微信小程序配置、iOS 配置）：
+
+```bash
+npm run verify:ready
+```
+
+也可一次性跑：
+
+```bash
+npm run verify:release
+```
+
+说明：
+- `verify:ready` = `verify:install-readiness + verify:release`；
+- `verify:release` = `check:release` +（如设置 `API_BASE`）`verify:all`；
+- `verify:all` 会在本机服务验收可用时执行流式/会话/数字人闭环检查（需先启动后端并设置 `API_BASE`）。
+- `DG_ALLOW_PLACEHOLDER_IDS=true` 为本地试运行/开发模式（不把 demo 占位 appId/domain 当阻塞项）；发布前请改用正式配置并移除该环境变量。
+
+`npm run setup:release` 已内置：
+1) 执行 `setup:platform-config`
+2) 执行 `verify-install-readiness`
+3) 执行 `check:release`
+4) 如检测到 `WECHAT_API_BASE` / `API_BASE`，自动执行 `verify:all`
+
+## 网页可安装（PWA）
+
+项目现在支持网页安装增强（生产环境）：
+
+- `web/public/manifest.webmanifest`
+- `web/public/sw.js`
+- `web/src/main.tsx`（生产环境自动注册）
+- `web/src/App.tsx`（安装引导按钮）
+
+访问站点时，若浏览器支持，会出现“安装网页版（可直接进入）”按钮。安装后可像 App 一样从主屏启动。
+
+当前 `sw.js` 会在安装时缓存 app shell、manifest、图标、默认头像、情绪表情以及 Vite 构建后的 hash JS/CSS；页面导航在离线时会回退到 `index.html`。因此已安装的网页版在无网络时仍能打开静态聊天界面，并继续读取本机 `localStorage` 中的数字人、聊天记录和关系状态。远程 `/api/*`、`/audio/*`、`/models/*` 仍保持网络直连，断网时会交给前端静态 fallback 处理。
+
+## 三端跳转链接（可选）
+
+如你要在网页页头直接放出小程序 / iOS 入口，设置以下环境变量即可：
+
+- `VITE_WECHAT_MINI_LINK`：微信小程序跳转链接（开放平台链接或自定义页面）。
+- `VITE_WECHAT_MINI_QRCODE`：小程序体验码图片地址（可直接打开图片）。
+- `VITE_IOS_APP_LINK`：iOS App Store 或 TestFlight 链接。
+- `VITE_IOS_INSTALL_HINT`：iOS 安装说明（例如：请到 TestFlight 安装内测版本）。
+
+示例：
+
+```bash
+VITE_WECHAT_MINI_LINK=https://mp.weixin.qq.com/....   # 如有
+VITE_WECHAT_MINI_QRCODE=https://example.com/mini_qr.png
+VITE_IOS_APP_LINK=https://apps.apple.com/app/你的应用/idxxxx
+VITE_IOS_INSTALL_HINT=当前需 TestFlight 内测，请先加开发者白名单
+```
+
+说明：当前离线策略采用 app shell + 静态资源优先缓存，`/api/*`、`/audio/*`、`/models/*` 仍走网络请求；如需真正跨设备同步和远程模型离线缓存，需要接入正式后端和 CDN 缓存策略。
+
+## 联调验收
+
+```bash
+npm run verify:all
+```
+
+默认检查：
+- `GET /healthz`
+- `GET /api/digital-humans`
+- `POST /api/chat`
+
+如服务不在本机，请设置：
+
+```bash
+API_BASE=https://your-api.example.com
+npm run verify:all
+```
+
+新增说明：
+
+- 当前脚手架已加上 `DELETE /api/digital-humans/:id`，便于清理自定义数字人。
+- 验收脚本会在创建临时数字人后自动回收，避免 `custom-humans.json` 被持续污染。
+- 建议上线前保持 `server/src/data/custom-humans.json` 只保留你希望长期展示/可选的人物数据（初始可为空）。
+
+也可只跑“数字人闭环”验收（创建数字人 + 对话流 + 情绪切换 + 清理）：
+
+```bash
+API_BASE=http://127.0.0.1:8787
+npm run verify:digital-human-loop
+```
+
+## 本地开发 API 地址说明
+
+- Web 端优先级：`VITE_API_URL` > `window.__DG_API_BASE` > 自动推断地址。  
+  在本地双服务启动时，自动推断会优先尝试 `http://<host>:8787`（原样支持 localhost / 127.0.0.1 / [::1]）。
+- 小程序端继续通过 `WECHAT_API_BASE` 指向后端域名。
+
+## API 概览
+
+### `GET /api/digital-humans`
+返回可用数字人列表（`id / name / description / avatarUrl / modelUrl / emotionProfile / avatarType / avatarVideoProfile / voiceProfile / defaultMood`）。
+
+### `POST /api/digital-humans`
+创建自定义数字人（开发态持久化到 `server/src/data/custom-humans.json`）：
+
+```json
+{
+  "name": "Lina 2",
+  "description": "活泼甜美",
+  "avatarUrl": "/assets/avatars/lina2.png",
+  "modelUrl": "https://your-cdn/models/lina.glb",
+  "voice": "nova",
+  "personalityTagline": "轻松甜蜜，但不失礼貌。",
+  "relationshipMode": "sweet",
+  "defaultMood": "happy",
+  "emotionProfile": {
+    "happy": "https://your-cdn/emotion/happy.png",
+    "sad": "https://your-cdn/emotion/sad.png"
+  },
+  "avatarType": "video",
+  "avatarVideoProfile": {
+    "happy": "https://your-cdn/video/happy.mp4",
+    "sad": "https://your-cdn/video/sad.mp4"
+  }
+}
+```
+
+说明：
+- `avatarType`：`image`（默认）或 `video`
+- `avatarType=image` 时读取 `emotionProfile`（情绪图）
+- `avatarType=video` 时读取 `avatarVideoProfile`（情绪视频）
+- `modelUrl`：可选 GLB/GLTF 模型地址；Web 端开启 3D 模式时优先加载该模型，未配置或加载失败会回退到内置程序化 3D 形象
+- `personalityTagline`：补充角色人设偏好
+- `relationshipMode`：关系风格，可填 `sweet`、`flirty`、`playful`、`mature`
+
+### `POST /api/models/upload`
+
+上传 GLB/GLTF 模型文件（JSON base64），服务端会保存到 `server/data/models` 并返回可访问的 `/models/...` 地址：
+
+```json
+{
+  "fileName": "lina.glb",
+  "fileBase64": "base64模型文件内容",
+  "mimeType": "model/gltf-binary"
+}
+```
+
+返回示例：
+
+```json
+{
+  "modelUrl": "/models/lina-mqxyz-abc123.glb",
+  "fileName": "lina-mqxyz-abc123.glb",
+  "mimeType": "model/gltf-binary",
+  "size": 123456
+}
+```
+
+说明：
+- 支持 `.glb` / `.gltf`，单文件上限 25MB。
+- Web 创建页选择本地 GLB/GLTF 文件时，会优先上传到该接口；静态 Pages 无后端时会自动保留本地临时预览。
+
+### `DELETE /api/digital-humans/:id`
+删除自定义数字人（仅移除 `custom-humans.json` 中用户创建项），示例：
+
+```bash
+curl -X DELETE "https://your-api.example.com/api/digital-humans/custom-1680000000000"
+```
+
+默认会返回：
+
+```json
+{ "ok": true }
+```
+
+### 行为策略配置
+
+- 环境变量 `DG_UNRESTRICTED_CHAT` 控制回复限制：
+  - `true`（默认）：按角色关系风格输出，不额外拦截聊天内容
+  - `false`：改为较保守回复策略
+
+### `POST /api/chat`
+
+```json
+{
+  "sessionId": "session-01",
+  "characterId": "lina",
+  "message": "今天过得好吗？",
+  "history": [{ "role": "user", "content": "..." }]
+}
+```
+
+返回：
+
+```json
+{
+  "sessionId": "session-01",
+  "characterId": "lina",
+  "text": "我也挺好的，想和你聊一会儿…",
+  "emotion": "happy",
+  "audioUrl": "/audio/xxx.mp3"
+}
+```
+
+### `POST /api/chat/stream`
+
+SSE 流式接口，返回事件：
+
+- `meta`：会话元信息
+- `chunk`：文本增量片段
+- `emotion`：情绪增量
+- `done`：完整文本和语音地址
+
+### `POST /api/transcribe`
+
+浏览器语音输入在不支持 Web Speech 的环境下会走录音文件转写链路。
+
+请求体：
+
+```json
+{
+  "audioBase64": "base64 音频内容",
+  "mimeType": "audio/webm",
+  "language": "zh"
+}
+```
+
+返回：
+
+```json
+{ "text": "用户说的话" }
+```
+
+后端转写目前使用 OpenAI Whisper（`OPENAI_API_KEY` 未配置时返回错误）。
+
+## 真实 3D 数字人和高质量语音
+
+当前版本支持多种形象方式：
+
+- 默认采用头像 + 情绪表情图；
+- 可选 `emotionProfile`（JSON 映射）为不同情绪配置独立图片，服务端和端侧将按实时情绪事件切换形象；
+- 新增 `avatarVideoProfile` 后可在 `avatarType=video` 下按情绪播放视频，替代静态图层。
+- Web 端可在创建数字人时填写 `modelUrl` 或上传本地 GLB/GLTF 模型；3D/2D 开关开启 3D 时会优先加载该模型，聊天情绪会复用同一套 3D 外层动作。
+- 小程序端可在创建数字人时填写 `modelUrl` 并保留到同一套数字人配置；当前小程序形象仍以 2D 表情/视频预览为主，页面会显示 3D/2D 回退状态，方便低性能设备一键切换语义状态。
+- 项目已内置 `/assets/expressions/{emotion}.svg`（happy / sad / surprise / wink / neutral / angry / love）用于默认数字人的情绪图形化显示。
+
+可在 `web/src/components/Avatar.tsx` 与 `web/src/components/ChatPanel.tsx`、`server/src/services/tts.ts`
+替换为：
+- 更完整的 VRM/Live2D 数字人渲染组件
+- 第三方数字人合成/播报服务（如 D-ID、HeyGen、Azure Speech）
+- 真实口型同步（WebRTC/Lip-sync）
+
+## 微信小程序部署
+
+1. 在微信开发者工具中导入 `wechat-mini/` 目录。
+2. 将 `app.js` 中 `globalData.apiBase` 替换为后端公网地址（示例：`https://api.example.com`）。  
+   已在发布前配置脚本支持一次性替换，可执行：
+   - `WECHAT_API_BASE=https://api.example.com WECHAT_APP_ID=... npm run setup:platform-config`
+
+   同时在小程序后台配置 request 合法域名，至少包含：
+   - `https://api.example.com`
+   - `https://api.example.com/audio`
+   - `https://api.example.com/assets`
+3. 小程序端已支持：
+   - 自动拉取数字人列表并切换当前数字人
+   - 创建数字人（会话内保持配置）
+   - 文字返回打字机式展示（每段文字同步更新情绪）
+   - 形象展示（头像 + 实时表情）
+   - `avatarType` 与 `avatarVideoProfile` 创建参数
+   - `modelUrl` 创建参数与 3D/2D 回退状态提示
+   - 创建数字人时可填写 `emotionProfile`（JSON），例如为 `happy`/`sad`/`love` 指定图片地址
+   - 语音自动播放
+4. 配置小程序域名白名单：`https://<你的域名>`。
+5. 小程序当前直接对接 `/api/chat/stream`：若后端返回 `done` 与 `chunk` 事件，客户端会按收到片段/情绪逐步播放文本。
+6. 小程序默认头像资源位于 `wechat-mini/assets/avatars`，可替换为你自己的形象素材。
+7. `emotionProfile` 可以使用相对地址（如 `/assets/expressions/happy.svg`）或绝对地址。
+
+## 语音与数字人形象说明
+
+- 当前语音链路：
+  - 后端有 `OPENAI_API_KEY`：返回 `/audio/xxx.mp3`，网站端会通过音频标签播放。
+  - 后端无 `OPENAI_API_KEY`：网站端自动回退为浏览器语音合成（Web Speech）。
+- 当前形象链路包括 2D 表情切图、情绪视频和 Web 端 GLB/GLTF 3D 模型；后续可替换为完整 VRM/Live2D 引擎或第三方数字人 SDK。
+
+## iOS 打包（Capacitor）
+
+### 前置环境
+
+1. macOS + Xcode（需选择完整开发者工具链）
+2. CocoaPods（`sudo gem install cocoapods`）
+3. 安装后在命令行切换到完整 Xcode：
+   - `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+
+4. 一次构建并同步：`npm run build:for-ios`（可带 `VITE_API_URL=https://你的后端地址`）
+5. 第一次初始化 iOS 工程（若提示未初始化）：
+   - `cd mobile && npm install`
+   - `npm run init:ios`
+6. 如果当前 `mobile/ios/` 目录存在但 `ios/App/Podfile` 缺失（表示旧构建不完整），请先执行：
+   - `npm run rebuild:ios`
+7. 打开 Xcode：
+   - `npm run open:ios --workspace @dg/mobile`
+   - 或使用根目录快捷命令：
+     - `npm run build:ios`
+     - `npm run sync:ios`
+     - `npm run open:ios`
+   - 排障：`npm run doctor:ios`（检查 xcodebuild / xcode-select / CocoaPods / Podfile）
+
+> 新增说明：
+> - 根目录 `prepare:ios` 会先构建 Web 再执行 iOS 预构建；
+> - `build:ios` 会直接触发 `build:for-ios`；
+> - `sync:ios` 会把最新 Web 内容同步到 Capacitor iOS 工程；
+> - 若后端非同机部署，优先使用 `WECHAT_API_BASE`（`npm run setup:release` 会自动透传为 `VITE_API_URL`），或直接设置 `VITE_API_URL`；否则移动端可能请求到文件 origin。
+
+> iOS 安装建议：如 Web 包里无法访问到后端，请在打包前设置环境变量
+> `VITE_API_URL=https://你的后端地址`，构建后的页面会优先使用该值。
+
+> iOS 本地文件调试下，Web 端 API 地址优先级为：
+> `VITE_API_URL` > `window.__DG_API_BASE__` > 当前页面 origin。
+
+## 常见联调问题
+
+- `verify:all` 可能在某些环境遇到 `localhost:8787` 被其他服务占用。若 `/healthz` 不通，可显式执行：
+  - `API_BASE=http://127.0.0.1:8787 npm run verify:all`
+  - `API_BASE=http://[::1]:8787 npm run verify:all`
+- 微信小程序上线前需同步配置合法域名白名单（`request` 域名 + `audio` + `assets`）。
+
+## 交付：安装与发布路径
+
+- 网站：
+  - 本地验收无障碍后，可直接部署 `web/dist` 到任何静态站点（Vercel、Cloudflare Pages、Nginx）。
+- 微信小程序：
+  - 在微信开发者工具内导入 `wechat-mini/`，上传后提交审核即可生成体验版二维码。
+  - 上线前将 `app.js` 的 `apiBase` 与正式域名对齐。
+- iOS（Capacitor）：
+  - `npm run build:ios` 会先构建 Web。
+  - `npm run sync:ios` 将最新 Web 包同步到 `ios/`。
+  - `npm run open:ios` 打开 Xcode 后打包 `.ipa` 走企业签名或 TestFlight 审核流。
+
+## 联调顺序
+
+1. 先启动后端：`cd server && npm run dev`
+2. 启动网站：`cd web && npm run dev`
+3. 验证 `/api/chat/stream` 是否返回 `chunk`、`emotion`、`done` 三类事件。
+4. 验证网站和小程序都能创建数字人并在聊天中触发情绪切换（表情变化明显）。
+5. 验证小程序与 iOS 使用同一套 `sessionId` 能看到连续上下文（可复用角色语气）。
+
+## 系统设置与网页配置
+
+「系统设置页」需二次密码解锁，可网页化配置以下项，**保存即生效**（无需重启）：
+
+- **LLM**：Base URL、模型名、是否支持视觉、API Key（写时不回显，仅返回 `hasApiKey`）。
+- **TTS**：小米 MiMo API Key。
+- **生图（RunningHub）**：API Key、触发词（多个，至少 1 个）、超时秒数（10–600）。
+- **提示词**：系统提示与各规则提示（可一键重置为默认）。
+- **数字人管理**：新增 / 编辑 / 删除 / 清除记忆。
+
+配置落盘于 `server/src/data/system-config.json`（明文密钥，已 gitignore），内存缓存即时刷新。相关 API：
+
+- `GET /api/settings`（脱敏，需二次密码 Token）
+- `PUT /api/settings`
+- `POST /api/settings/prompts/reset`（恢复默认提示词）
+- `POST /api/settings/llm/models`（拉取模型列表）
+- `POST /api/settings/auth`（登录二次密码）
+- `POST /api/settings/auth/password`（修改二次密码）
+- `POST /api/settings/restart-service`（修改 Telegram Bot Token 后需重启生效）
+
+## 「拍张照」生图功能（RunningHub）
+
+在 **Telegram 端**，当消息包含任一触发词（默认「拍张照」，可在设置页自定义多个）时：
+
+1. 数字人仅回复「📷 好的，那我去拍张照，稍等一下下哦~」，不生成内容；
+2. 等待照片期间，用户的任何消息只记为未读、不回复；
+3. 照片生成成功 / 接口报错 / 超时后，基于累积未读上下文 **统一回复一条**（模拟「拍完照回来翻未读」）；
+4. 接口报错会打印完整堆栈并立即回复；超时（默认 120s，可配）则放弃等待直接回复。
+
+生图链路（RunningHub API）：
+
+- 上传头像：`POST /openapi/v2/media/upload/binary`（multipart `file` → `data.fileName`）
+- 提交任务：`POST /openapi/v2/run/ai-app/2075560920047575042`（Bearer，nodeInfoList：154=输入图 / 186=分辨率 / 187=数量 / 189=比例 / 195=提示词）
+- 轮询：`POST /openapi/v2/query`（`{"taskId":""}`）→ SUCCESS 返回 ZIP，下载解压取首图回传
+
+**提示词生成规则**：上下文含衣着 / 环境 / 姿势时 LLM 贴合执行；不足时 LLM 按数字人人设随机现编（每次不同），绝不使用默认参考串。每个数字人与 RunningHub 通讯全程落日志，统一前缀 `[RB][角色名]`。
+
+## Telegram 多机器人部署
+
+- 每个数字人在配置中绑定独立 `telegramBotToken`（`DigitalHumanConfig.telegramBotToken`），服务以 polling 模式各自拉取私聊消息。
+- 修改某数字人的 Bot Token 后，需到设置页点「重启服务」使新 Token 生效。
+- 下载/编辑数字人：内置 Lina / Moon 及用户自定义数字人均支持独立 Telegram Bot。
+
+## 数据与记忆：服务器单一真源
+
+为避免多端记忆互相串扰，以下数据以**后端为唯一真源**：
+
+- **聊天历史**：`server/src/data/sessions/`，按角色存为 `mem-<characterId>`（上限 2000 轮）；切角色时前端 `GET /api/session/mem-<characterId>` 加载并与本地合并。
+- **长期记忆 / 关系 / 禁忌**：`server/src/data/user-memories/<id>.json`，经 `GET/PUT/DELETE /api/user-memory/:characterId` 读写；聊天禁忌以该记忆为权威主源（`character.chatTaboos` 仅兜底）。
+- **前端隔离**：按角色分别存储（`dg-user-memory-v1:<id>`），Lina / Moon / 自定义三人后端历史与长期记忆互不干扰。
+
 ---
 
-## 🛡️ 合规说明
+## 合规说明
 
-- 本项目默认不做严格敏感词过滤（按需求「不设限」设计）。
-- 亲密 / 暧昧类场景需用户完成成年确认后解锁。
-- 真实上线前建议补充：未成年人保护、用户反馈 / 举报机制、聊天与语音数据的留存与隐私说明、以及区域化合规（尤其是跨境存储）。
-
----
-
-## 📄 License
-
-[MIT](./LICENSE)
+- 该模板默认不做严格敏感词过滤（按你的需求“不设限”）。  
+- 真实上线前建议加入：
+  - 年龄确认与未成年人保护
+  - 用户反馈/举报机制
+  - 数据留存与隐私说明（语音/聊天内容脱敏）
+  - 区域化合规（尤其是跨境存储）
