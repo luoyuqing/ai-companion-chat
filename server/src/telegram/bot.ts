@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api, RawApi } from "grammy";
 
 import { runChat, generateMemoryForSession } from "../core/chat";
+import { getRunningHubConfig } from "../core/config";
 import {
   applyCharacterPatch,
   AVATAR_DIR,
@@ -31,11 +32,15 @@ import {
 } from "../core/scenes";
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
-import { runPhotoTask } from "../services/photoGen";
-import { clearSession, importSession, loadSession, updateSessionMeta } from "../services/session";
+import { runPhotoTask, PhotoTimeoutError } from "../services/photoGen";
+import { clearSession, appendToSession, importSession, loadSession, updateSessionMeta } from "../services/session";
 import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
 
 const execFileAsync = promisify(execFile);
+
+// 拍照等待期锁：key 为 chatSessionId。命中期间用户发来的任何消息都只记为「未读」，不回复、不再触发。
+// 自然按数字人隔离：chatSessionId 含角色 id（固定角色为 mem-<id>），不同角色互不影响。
+const photoPending = new Set<string>();
 
 // 强制 Node 优先 IPv4 解析：境外服务器常无可用 IPv6 路由，undici fetch 先试 IPv6 会 ETIMEDOUT
 // （Telegram 文件下载 api.telegram.org/file/... 因此超时）。改为 ipv4first 后走通。
@@ -330,19 +335,75 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     );
   }
 
-  // 处理【拍张照】生图请求：异步生成并发送，不阻塞正常聊天回复
-  async function handlePhotoRequest(ctx: BotContext, character: DigitalHumanConfig): Promise<void> {
-    const chatId = ctx.chat?.id;
-    if (chatId == null) return;
-    await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
-    await ctx.reply("📷 姐姐这就去拍，稍等一下下哦~");
-    const session = await loadSession(chatSessionId(ctx));
-    const recent = (session?.history ?? []).slice(-12);
-    const res = await runPhotoTask({ character, recentMessages: recent });
+  // 判断消息是否包含任一触发词（可配置多个，至少保留���个）
+  function containsTrigger(text: string, words?: string[]): boolean {
+    if (!words || words.length === 0) return false;
+    return words.some((w) => w && text.includes(w));
+  }
+
+  // 将拍照等待期用户发来的消息记为「未读」（仅落盘到会话历史，不触发回复）
+  async function recordUnread(sid: string, text: string): Promise<void> {
     try {
-      await ctx.api.sendPhoto(chatId, new InputFile(res.imagePath));
+      await appendToSession(sid, { role: "user", content: text });
+    } catch (e) {
+      console.error("记录未读消息失败:", e);
+    }
+  }
+
+  // 拍照主流程（异步、不阻塞）：
+  // 1) 生成并发送照片；期间用户消息全部记为未读、不回复；
+  // 2) 照片发出（或接口报错/超时）后，基于等待期累积的未读上下文，统一回复「一条」消息，
+  //    模拟「忙完拍照回来，再统一看未读消息回复」的真实场景。
+  async function runPhotoFlow(ctx: BotContext, character: DigitalHumanConfig, sid: string): Promise<void> {
+    const chatId = ctx.chat?.id;
+    const cfg = getRunningHubConfig();
+    const timeoutMs = Math.max(10, Math.min(600, Number(cfg.timeoutSec) || 120)) * 1000;
+
+    let photoPath: string | null = null;
+    let cleanup: (() => void) | null = null;
+    let outcome: "ok" | "error" | "timeout" = "ok";
+    let errMsg: string | null = null;
+
+    try {
+      const session = await loadSession(sid);
+      const recent = (session?.history ?? []).slice(-12);
+      const res = await runPhotoTask({ character, recentMessages: recent, timeoutMs });
+      photoPath = res.imagePath;
+      cleanup = res.cleanup;
+    } catch (err) {
+      outcome = err instanceof PhotoTimeoutError ? "timeout" : "error";
+      errMsg = err instanceof Error ? err.message : String(err);
+      // 打印完整报错信息与堆栈，便于排查 RunningHub 接口异常
+      console.error(
+        `[拍照] ${outcome === "timeout" ? "超时" : "接口报错"}:`,
+        errMsg,
+        err instanceof Error && err.stack ? `\n${err.stack}` : ""
+      );
+    }
+
+    try {
+      if (photoPath) {
+        if (chatId != null) {
+          await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
+          await ctx.api.sendPhoto(chatId, new InputFile(photoPath));
+        }
+      } else {
+        const label = outcome === "timeout" ? "拍照超时了" : "拍照失败了";
+        await ctx.reply(`📷 ${label}${errMsg ? "：" + errMsg.slice(0, 120) : ""}`);
+      }
+
+      // 照片发出（或失败后）：基于等待期累积的未读消息，统一回复「一条」
+      const backMessage = "（刚拍完照回来啦，照片已经发给你咯~ 你刚才跟我说的那些我都看到啦，挨个回你）";
+      try {
+        const result = await runChatWithContext(ctx, backMessage);
+        await replyWithTextAndVoice(ctx, result.text, result.character);
+      } catch (replyErr) {
+        console.error("[拍照] 照片后统一回复失败:", replyErr);
+        await ctx.reply("（刚才去拍照啦，这会儿有点忙不过来，你再说一遍好不好~）").catch(() => {});
+      }
     } finally {
-      res.cleanup();
+      if (cleanup) cleanup();
+      photoPending.delete(sid);
     }
   }
 
@@ -1024,19 +1085,36 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         return ctx.reply(`已更新${field === "name" ? "名字" : field === "description" ? "描述" : "头像"}。`);
       }
 
+      // ---------- 拍照等待期：用户发的任何消息都只记为未读，不回复、不再触发 ----------
+      const sid = chatSessionId(ctx);
+      if (photoPending.has(sid)) {
+        await recordUnread(sid, text);
+        return;
+      }
+
+      // ---------- 触发词检测（可配置多个，至少保留一个）----------
+      const rhCfg = getRunningHubConfig();
+      if (containsTrigger(text, rhCfg.triggerWords)) {
+        const character = await currentCharacter(ctx);
+        if (!character) {
+          return ctx.reply("请先用 /list 选择一个数字人再聊天。");
+        }
+        photoPending.add(sid);
+        // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
+        await recordUnread(sid, text);
+        await ctx.reply("📷 姐姐去拍张照，稍等一下下哦~");
+        // 异步执行，不阻塞；等待期内的用户消息由 photoPending 拦截为「未读」
+        void runPhotoFlow(ctx, character, sid).catch((err) => {
+          console.error("[拍照] 流程异常:", err);
+          photoPending.delete(sid);
+        });
+        return;
+      }
+
       // 普通聊天
       try {
         const result = await runChatWithContext(ctx, text);
         await replyWithTextAndVoice(ctx, result.text, result.character);
-
-        // 【拍张照】触发生图（异步，不阻塞聊天回复；按数字人隔离：各自头像/会话/独立 bot）
-        if (text.includes("拍张照")) {
-          void handlePhotoRequest(ctx, result.character).catch((err) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error("拍照生图失败:", msg);
-            ctx.reply(`📷 拍照失败：${msg.slice(0, 120)}`).catch(() => {});
-          });
-        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "NO_CHARACTER") {

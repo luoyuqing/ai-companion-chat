@@ -36,6 +36,10 @@ export interface TtsConfig {
 export interface RunningHubConfig {
   /** RunningHub 生图接口 Bearer Key（设置页可配置，亦可走 RUNNINGHUB_API_KEY 环境变量） */
   apiKey: string;
+  /** 生图触发词（只要消息包含其中任一子串即触发生图）。至少需保留一个。 */
+  triggerWords: string[];
+  /** 生图超时时间（秒，范围 10–600）。超时后数字人不再等待照片，直接按聊天上下文回复一条消息。 */
+  timeoutSec: number;
 }
 
 export interface SystemConfig {
@@ -50,7 +54,7 @@ export interface SystemConfig {
 export type PublicSystemConfig = Omit<SystemConfig, "llm" | "tts" | "runningHub"> & {
   llm: LlmConfig & { hasApiKey: boolean };
   tts: TtsConfig & { hasApiKey: boolean };
-  runningHub: { hasApiKey: boolean };
+  runningHub: { hasApiKey: boolean; triggerWords: string[]; timeoutSec: number };
 };
 
 const CONFIG_FILE = path.join(DATA_DIR, "system-config.json");
@@ -80,7 +84,9 @@ function buildDefaults(): SystemConfig {
       voice: envString(process.env.MIMO_TTS_VOICE) || MIMO_DEFAULT_VOICE
     },
     runningHub: {
-      apiKey: envString(process.env.RUNNINGHUB_API_KEY)
+      apiKey: envString(process.env.RUNNINGHUB_API_KEY),
+      triggerWords: ["拍张照"],
+      timeoutSec: 120
     }
   };
 }
@@ -112,8 +118,22 @@ function deepMergeTts(base: TtsConfig, override?: Partial<TtsConfig>): TtsConfig
 
 function deepMergeRunningHub(base: RunningHubConfig, override?: Partial<RunningHubConfig>): RunningHubConfig {
   if (!override) return base;
+  // 触发词：仅当传入非空数组时才覆盖；空数组/缺失则保留现有值（保证至少留一个）
+  const triggerWords =
+    Array.isArray(override.triggerWords) && override.triggerWords.length > 0
+      ? override.triggerWords.map((w) => String(w).trim()).filter(Boolean)
+      : base.triggerWords;
+  // 超时：仅当传入正数（number 或能解析为正数的 string）时才覆盖
+  let timeoutSec = base.timeoutSec;
+  if (typeof override.timeoutSec === "number" && override.timeoutSec > 0) {
+    timeoutSec = override.timeoutSec;
+  } else if (typeof override.timeoutSec === "string" && Number(override.timeoutSec) > 0) {
+    timeoutSec = Number(override.timeoutSec);
+  }
   return {
-    apiKey: override.apiKey !== undefined ? String(override.apiKey) : base.apiKey
+    apiKey: override.apiKey !== undefined ? String(override.apiKey) : base.apiKey,
+    triggerWords,
+    timeoutSec
   };
 }
 
@@ -169,7 +189,7 @@ export interface TtsConfigInput {
 export interface SystemConfigInput {
   llm?: LlmConfigInput;
   tts?: TtsConfigInput;
-  runningHub?: { apiKey?: string };
+  runningHub?: { apiKey?: string; triggerWords?: string[]; timeoutSec?: number };
   /** 用户覆盖的提示词（来自网页端「提示词」设置）。传 undefined 表示保留现有值；传 {} 表示清除覆盖、恢复默认 */
   prompts?: unknown;
 }
@@ -233,7 +253,9 @@ export function publicSystemConfig(): PublicSystemConfig {
       hasApiKey: Boolean(cfg.tts.apiKey)
     },
     runningHub: {
-      hasApiKey: Boolean(cfg.runningHub.apiKey)
+      hasApiKey: Boolean(cfg.runningHub.apiKey),
+      triggerWords: cfg.runningHub.triggerWords,
+      timeoutSec: cfg.runningHub.timeoutSec
     }
   };
 }

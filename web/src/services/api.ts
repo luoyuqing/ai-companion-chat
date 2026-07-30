@@ -1076,6 +1076,10 @@ export interface PromptSettings {
 
 export interface SettingsRunningHub {
   hasApiKey: boolean;
+  /** 生图触发词（多个，至少保留一个） */
+  triggerWords: string[];
+  /** 生图超时时间（秒） */
+  timeoutSec: number;
 }
 
 export interface SystemSettings {
@@ -1088,7 +1092,7 @@ export interface SystemSettings {
 export interface SaveSettingsInput {
   llm?: { baseUrl?: string; apiKey?: string; model?: string; supportsVision?: boolean };
   tts?: { apiKey?: string };
-  runningHub?: { apiKey?: string };
+  runningHub?: { apiKey?: string; triggerWords?: string[]; timeoutSec?: number };
   prompts?: PromptSettings;
 }
 

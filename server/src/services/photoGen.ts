@@ -24,6 +24,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** 生图轮询超时异常（与「RunningHub 接口报错」区分，便于上层走不同提示） */
+export class PhotoTimeoutError extends Error {
+  constructor(message = "生图超时") {
+    super(message);
+    this.name = "PhotoTimeoutError";
+  }
+}
+
 // ---------- RunningHub 接口封装 ----------
 
 async function rhUploadImage(apiKey: string, imagePath: string): Promise<string> {
@@ -196,6 +204,8 @@ export interface PhotoResult {
 export async function runPhotoTask(opts: {
   character: DigitalHumanConfig;
   recentMessages: ChatMessage[];
+  /** 轮询超时时间（毫秒），默认 POLL_TIMEOUT_MS。超时抛出 PhotoTimeoutError。 */
+  timeoutMs?: number;
 }): Promise<PhotoResult> {
   const cfg = getRunningHubConfig();
   const apiKey = cfg.apiKey || process.env.RUNNINGHUB_API_KEY;
@@ -209,9 +219,10 @@ export async function runPhotoTask(opts: {
   const fileName = await rhUploadImage(apiKey, avatarPath);
   const taskId = await rhSubmit(apiKey, fileName, prompt);
 
-  // 8s 轮询，直到 SUCCESS / FAILED / 超时
+  // 8s 轮询，直到 SUCCESS / FAILED / 超时（超时时长可经 timeoutMs 配置，默认 POLL_TIMEOUT_MS）
   let imageUrl: string | null = null;
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : POLL_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
     const r = await rhQuery(apiKey, taskId);
@@ -223,7 +234,7 @@ export async function runPhotoTask(opts: {
       throw new Error(`生图失败：${r.errorMessage || JSON.stringify(r.failedReason || {}).slice(0, 160)}`);
     }
   }
-  if (!imageUrl) throw new Error("生图超时（超过 150 秒仍未完成）");
+  if (!imageUrl) throw new PhotoTimeoutError(`生图超时（超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成）`);
 
   // 下载 ZIP → 解压 → 取首张图片
   const tmpDir = path.join(os.tmpdir(), `dg-photo-${Date.now()}-${Math.random().toString(16).slice(2)}`);

@@ -84,6 +84,8 @@ export function SettingsPage({
 
   // 生图（RunningHub）表单
   const [rhApiKey, setRhApiKey] = useState("");
+  const [rhTriggerWords, setRhTriggerWords] = useState("");
+  const [rhTimeoutSec, setRhTimeoutSec] = useState("120");
 
   // 提示词表单
   const [prompts, setPrompts] = useState<PromptSettings | null>(null);
@@ -101,6 +103,8 @@ export function SettingsPage({
     setLlmApiKey("");
     setTtsApiKey("");
     setRhApiKey("");
+    setRhTriggerWords((data.runningHub?.triggerWords || []).join("\n"));
+    setRhTimeoutSec(String(data.runningHub?.timeoutSec ?? 120));
     setPrompts(data.prompts);
   };
 
@@ -186,13 +190,23 @@ export function SettingsPage({
 
   const saveRh = () =>
     guard(async () => {
-      if (!rhApiKey.trim()) {
-        flash("未输入新的 API Key，无需保存");
+      const words = rhTriggerWords
+        .split(/[\n,，]/)
+        .map((w) => w.trim())
+        .filter(Boolean);
+      if (words.length === 0) {
+        flash("至少需要保留一个触发词");
         return;
       }
-      const data = await saveSettings({ runningHub: { apiKey: rhApiKey.trim() } });
+      const timeoutSec = Math.max(10, Math.min(600, Number(rhTimeoutSec) || 120));
+      const payload: { apiKey?: string; triggerWords: string[]; timeoutSec: number } = {
+        triggerWords: words,
+        timeoutSec
+      };
+      if (rhApiKey.trim()) payload.apiKey = rhApiKey.trim();
+      const data = await saveSettings({ runningHub: payload });
       applySettings(data);
-      flash("RunningHub 密钥已保存");
+      flash(rhApiKey.trim() ? "生图设置已保存" : "触发词 / 超时已保存");
     });
 
   const savePrompts = () =>
@@ -432,11 +446,36 @@ export function SettingsPage({
                     placeholder={settings.runningHub?.hasApiKey ? "••••••••（留空保持不变）" : "32 位 API Key"}
                   />
                 </label>
+
+                <label className="settings-field">
+                  <span>生图触发词（每行一个，或英文逗号分隔；至少保留一个）</span>
+                  <textarea
+                    rows={3}
+                    value={rhTriggerWords}
+                    onChange={(e) => setRhTriggerWords(e.target.value)}
+                    placeholder={"拍张照\n来张写真\n摆个 pose"}
+                  />
+                </label>
                 <p className="settings-lock-tip">
-                  用于在 Telegram 聊天中发送「拍张照」时调用 RunningHub 生图：以该数字人头像为输入，生成写实照片回传。密钥仅保存在服务器 system-config.json，不会回传前端。
+                  只要 Telegram 消息里包含其中任一子串即触发生图（按数字人隔离：各自头像/会话/Bot）。例如用户发「姐姐拍张照」就会触发。
+                </p>
+
+                <label className="settings-field">
+                  <span>生图超时时间（秒，10–600）：超时后数字人不再等照片，直接按聊天上下文回复一条</span>
+                  <input
+                    type="number"
+                    min={10}
+                    max={600}
+                    value={rhTimeoutSec}
+                    onChange={(e) => setRhTimeoutSec(e.target.value)}
+                  />
+                </label>
+
+                <p className="settings-lock-tip">
+                  触发后数字人只会提示「去拍张照，稍等」，期间你发任何消息她都不回复（记为未读）；照片生成后（或接口报错/超时）她再根据等待期累积的消息统一回复一条，模拟「忙完拍照回来再看未读」的真实场景。
                 </p>
                 <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveRh()}>
-                  <Save size={16} /> 保存 RunningHub 密钥
+                  <Save size={16} /> 保存生图设置
                 </button>
               </section>
             ) : null}
