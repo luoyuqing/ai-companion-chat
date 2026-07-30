@@ -12,3 +12,4 @@ server/src/data/system-config.json
 server/src/data/settings-auth.json
 server/src/data/sessions/
 server/src/data/user-memories/
+server/src/data/custom-humans.json
