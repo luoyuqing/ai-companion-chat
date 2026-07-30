@@ -2,7 +2,7 @@ import { ArrowRight, AppWindow, Camera, MessageCircle, Settings, Smartphone, Spa
 import { useEffect, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
 import { SettingsPage } from "./components/SettingsPage";
-import { DigitalHuman, fetchHumans } from "./services/api";
+import { DEFAULT_CHARACTER_ID, DigitalHuman, fetchHumans } from "./services/api";
 
 
 type ViewMode = "landing" | "chat";
@@ -254,7 +254,7 @@ export default function App() {
         <ChatPanel
           characters={characters}
           sessionId={sessionId}
-          selectedCharacterId={selectedCharacterId || characters[0]?.id || "lina"}
+          selectedCharacterId={selectedCharacterId || characters[0]?.id || DEFAULT_CHARACTER_ID}
           onResetSession={resetSession}
           onCharacterChange={handleCharacterChange}
         />

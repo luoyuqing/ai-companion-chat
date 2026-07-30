@@ -23,13 +23,12 @@ import {
   resolveMediaUrl,
   saveUserMemory,
   updateDigitalHuman,
-  uploadAvatarFile,
-  uploadModelFile
+  uploadAvatarFile
 } from "../services/api";
 
 // ============ 常量（从 ChatPanel 迁移） ============
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
-const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/lina-original.jpg`;
+const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/linxingwan.png`;
 
 // 长期记忆（按角色独立）；编辑数字人时加载并随表单保存。
 const EMPTY_MEMORY: UserMemory = {
@@ -79,7 +78,6 @@ interface NewCharacterForm {
   name: string;
   description: string;
   avatarUrl: string;
-  modelUrl: string;
   voiceProvider: "openai" | "azure" | "local" | "mimo";
   voice: string;
   audioModel: MimoAudioModel;
@@ -107,7 +105,6 @@ function defaultForm(): NewCharacterForm {
     name: "",
     description: "",
     avatarUrl: defaultAvatarUrl,
-    modelUrl: "",
     voiceProvider: "mimo",
     voice: "冰糖",
     audioModel: "mimo-v2.5-tts",
@@ -131,7 +128,6 @@ function fromCharacter(c: DigitalHuman): NewCharacterForm {
     name: c.name || "",
     description: c.description || "",
     avatarUrl: c.avatarUrl || defaultAvatarUrl,
-    modelUrl: c.modelUrl || "",
     voiceProvider: "mimo",
     voice: c.voiceProfile?.voice || "冰糖",
     audioModel: (c.voiceProfile?.audioModel as MimoAudioModel) || "mimo-v2.5-tts",
@@ -203,7 +199,6 @@ function buildPayload(form: NewCharacterForm): CreateHumanRequest {
     name: form.name.trim(),
     description: form.description.trim(),
     avatarUrl: form.avatarUrl.trim(),
-    modelUrl: form.modelUrl.trim() || undefined,
     avatarType: form.avatarType,
     voiceProvider: form.voiceProvider,
     voice: effectiveVoice,
@@ -244,7 +239,6 @@ function CharacterForm({
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
-  const [modelUploading, setModelUploading] = useState(false);
   const [memory, setMemory] = useState<UserMemory>(() => ({ ...EMPTY_MEMORY }));
 
   useEffect(() => {
@@ -309,42 +303,9 @@ function CharacterForm({
     setForm((prev) => ({ ...prev, voiceCloneSample: `data:${mime};base64,${base64}` }));
   };
 
-  const handleModelFile = async (fileList: FileList | null) => {
-    const file = fileList?.[0];
-    if (!file) return;
-    const isModelFile =
-      file.name.toLowerCase().endsWith(".glb") ||
-      file.name.toLowerCase().endsWith(".gltf") ||
-      file.type === "model/gltf-binary" ||
-      file.type === "model/gltf+json";
-    if (!isModelFile) {
-      setStatus("请上传 .glb 或 .gltf 模型文件");
-      return;
-    }
-    const objectUrl = URL.createObjectURL(file);
-    setForm((prev) => ({ ...prev, modelUrl: objectUrl }));
-    setModelUploading(true);
-    setStatus("模型已进入本地预览，正在尝试上传到后端...");
-    try {
-      const fileBase64 = await blobToBase64(file);
-      const uploaded = await uploadModelFile({
-        fileName: file.name,
-        fileBase64,
-        mimeType: file.type || undefined,
-        fallbackUrl: objectUrl
-      });
-      setForm((prev) => ({ ...prev, modelUrl: uploaded.modelUrl }));
-      setStatus(uploaded.hasFallback ? "静态模式已使用本地模型预览；刷新页面后请重新上传。" : "模型已上传，可创建持久化 3D 数字人。");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "模型上传失败，已保留本地预览");
-    } finally {
-      setModelUploading(false);
-    }
-  };
-
   const submit = async (evt: FormEvent) => {
     evt.preventDefault();
-    if (submitting || avatarUploading || modelUploading) return;
+    if (submitting || avatarUploading) return;
     if (!form.name.trim() || !form.description.trim()) {
       setStatus("名字和人设描述不能为空");
       return;
@@ -430,26 +391,6 @@ function CharacterForm({
             />
           ) : null}
         </div>
-
-        <details className="creator-advanced">
-          <summary>3D 模型（可选，默认使用静态头像）</summary>
-          <label className="field">
-            <span className="field-label">模型地址</span>
-            <input
-              value={form.modelUrl}
-              onChange={(e) => setForm((p) => ({ ...p, modelUrl: e.target.value }))}
-              placeholder="GLB/GLTF 在线地址，或从下方上传"
-            />
-          </label>
-          <label className="file-picker">
-            上传 GLB/GLTF 模型
-            <input
-              type="file"
-              accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
-              onChange={(e) => handleModelFile(e.currentTarget.files)}
-            />
-          </label>
-        </details>
 
         <label className="field">
           <span className="field-label">音频模型</span>
@@ -704,7 +645,7 @@ function CharacterForm({
         {status ? <small className="field-hint">{status}</small> : null}
         <div className="dh-form-actions">
           <button type="button" className="ghost-btn" onClick={onCancel}>取消</button>
-          <button type="submit" disabled={submitting || avatarUploading || modelUploading}>
+          <button type="submit" disabled={submitting || avatarUploading}>
             {submitting ? "保存中..." : mode === "create" ? "创建" : "保存修改"}
           </button>
         </div>

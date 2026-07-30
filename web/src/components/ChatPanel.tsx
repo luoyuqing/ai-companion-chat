@@ -1,12 +1,10 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
-  Box,
   Brain,
   Coffee,
   Download,
   Hand,
   Heart,
-  Image as ImageIcon,
   MessageCircle,
   Mic,
   MicOff,
@@ -25,6 +23,7 @@ import {
 import {
   ChatContext,
   ChatMessageRequest,
+  DEFAULT_CHARACTER_ID,
   DigitalHuman,
   Emotion,
   EmotionProfile,
@@ -46,9 +45,8 @@ import {
 import { Avatar } from "./Avatar";
 
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
-const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/lina-original.jpg`;
+const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/linxingwan.png`;
 const assetPlaceholderBase = `${PUBLIC_ASSET_BASE}assets`;
-const AVATAR_MODE_STORAGE_KEY = "dg-avatar-render-mode";
 const CHAT_STATE_STORAGE_PREFIX = "dg-chat-state-v2";
 const LOCAL_HUMANS_STORAGE_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_STORAGE_KEY = "dg-local-chat-context-v1";
@@ -138,7 +136,6 @@ interface LocalArchivePayload {
   exportedAt: string;
   sessionId: string;
   selectedCharacterId: string;
-  avatarRenderMode?: "2d" | "3d";
   activeSceneId?: CompanionSceneId;
   userMemory?: UserMemory;
   userMemories?: Record<string, UserMemory>;
@@ -331,7 +328,7 @@ function normalizeEmotionProfileObject(raw: unknown): EmotionProfile | undefined
 
 function getChatStateStorageKey(sessionId: string, characterId: string): string {
   const safeSessionId = encodeURIComponent(sessionId || "session-browser");
-  const safeCharacterId = encodeURIComponent(characterId || "lina");
+  const safeCharacterId = encodeURIComponent(characterId || DEFAULT_CHARACTER_ID);
   return `${CHAT_STATE_STORAGE_PREFIX}:${safeSessionId}:${safeCharacterId}`;
 }
 
@@ -525,7 +522,7 @@ function buildDefaultChatState(character: DigitalHuman | undefined, fallbackId: 
   return {
     messages: [{ role: "assistant", content: welcomeText }],
     emotion: character?.defaultMood || "neutral",
-    characterId: character?.id || fallbackId || "lina",
+    characterId: character?.id || fallbackId || DEFAULT_CHARACTER_ID,
     relationshipMode: character?.relationshipMode || "sweet",
     context: undefined
   };
@@ -573,7 +570,7 @@ function readStoredChatState(sessionId: string, character: DigitalHuman | undefi
       context
     };
   } catch {
-    return buildDefaultChatState(character, character?.id || "lina", welcomeText);
+    return buildDefaultChatState(character, character?.id || DEFAULT_CHARACTER_ID, welcomeText);
   }
 }
 
@@ -651,7 +648,6 @@ function normalizeImportedHumans(raw: unknown): DigitalHuman[] {
       name,
       description: String(value.description || "导入的数字人").trim(),
       avatarUrl: String(value.avatarUrl || defaultAvatarUrl).trim(),
-      modelUrl: String(value.modelUrl || "").trim() || undefined,
       avatarType: value.avatarType === "video" ? "video" : "image",
       emotionProfile: normalizeEmotionProfileObject(value.emotionProfile),
       avatarVideoProfile: normalizeEmotionProfileObject(value.avatarVideoProfile),
@@ -718,14 +714,12 @@ function buildLocalArchive(
     }
   }
 
-  const avatarRenderMode = typeof window !== "undefined" && window.localStorage.getItem(AVATAR_MODE_STORAGE_KEY) === "3d" ? "3d" : "2d";
   return {
     schema: EXPORT_SCHEMA,
     version: 1,
     exportedAt: new Date().toISOString(),
     sessionId,
     selectedCharacterId,
-    avatarRenderMode,
     activeSceneId,
     userMemories: readAllStoredUserMemories(),
     localHumans: normalizeImportedHumans(readLocalStorageJson<unknown>(LOCAL_HUMANS_STORAGE_KEY, [])),
@@ -771,9 +765,6 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
   }
   if (archive.selectedCharacterId) {
     window.localStorage.setItem(SELECTED_CHARACTER_STORAGE_KEY, String(archive.selectedCharacterId));
-  }
-  if (archive.avatarRenderMode === "2d" || archive.avatarRenderMode === "3d") {
-    window.localStorage.setItem(AVATAR_MODE_STORAGE_KEY, archive.avatarRenderMode);
   }
   if (isCompanionSceneId(archive.activeSceneId)) {
     window.localStorage.setItem(ACTIVE_SCENE_STORAGE_KEY, archive.activeSceneId);
@@ -966,10 +957,6 @@ function resolveSpeechTuning(
     selected.pitch = Math.max(0.92, selected.pitch - 0.02);
     selected.volume = Math.min(selected.volume, 0.88);
   }
-  if (character?.id === "moon") {
-    selected.rate = Math.max(0.8, selected.rate - 0.02);
-    selected.pitch = Math.max(0.92, selected.pitch - 0.03);
-  }
   return selected;
 }
 
@@ -989,7 +976,7 @@ export function ChatPanel({
   const welcomeText = "你来啦。今天想让我怎么陪你？";
   const initialCharacter = characters.find((item) => item.id === selectedCharacterId) || characters[0];
   const [state, setState] = useState<State>(() =>
-    buildDefaultChatState(initialCharacter, selectedCharacterId || "lina", welcomeText)
+    buildDefaultChatState(initialCharacter, selectedCharacterId || DEFAULT_CHARACTER_ID, welcomeText)
   );
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1009,10 +996,6 @@ export function ChatPanel({
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [speechError, setSpeechError] = useState("");
-  const [use3D, setUse3D] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(AVATAR_MODE_STORAGE_KEY) === "3d";
-  });
   const [avatarInteraction, setAvatarInteraction] = useState<CompanionInteractionId | null>(null);
   const [activeSceneId, setActiveSceneId] = useState<CompanionSceneId>(() => readStoredSceneId());
   const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory(initialCharacter?.id || ""));
@@ -1643,7 +1626,7 @@ export function ChatPanel({
     if (isLoading) return;
 
     const currentCharacter = characters.find((item) => item.id === state.characterId) || initialCharacter || null;
-    const resetCharacterId = currentCharacter?.id || state.characterId || selectedCharacterId || "lina";
+    const resetCharacterId = currentCharacter?.id || state.characterId || selectedCharacterId || DEFAULT_CHARACTER_ID;
     const resetState = buildDefaultChatState(currentCharacter || undefined, resetCharacterId, welcomeText);
     removeStoredChatState(sessionId, resetCharacterId);
     setIsLoading(true);
@@ -1720,16 +1703,6 @@ export function ChatPanel({
 
   const canUseVoiceInput = speechSupported || mediaRecorderSupported;
 
-  const toggleAvatarMode = () => {
-    setUse3D((current) => {
-      const next = !current;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(AVATAR_MODE_STORAGE_KEY, next ? "3d" : "2d");
-      }
-      return next;
-    });
-  };
-
   const toggleAutoVoice = () => {
     const next = !autoVoice;
     window.localStorage.setItem(AUTO_VOICE_STORAGE_KEY, String(next));
@@ -1755,7 +1728,7 @@ export function ChatPanel({
     if (typeof window === "undefined") return;
 
     try {
-      const archive = buildLocalArchive(sessionId, state.characterId || selectedCharacterId || "lina", state, activeSceneId);
+      const archive = buildLocalArchive(sessionId, state.characterId || selectedCharacterId || DEFAULT_CHARACTER_ID, state, activeSceneId);
       const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -1825,12 +1798,10 @@ export function ChatPanel({
           emotion={state.emotion}
           speaking={speaking}
           avatarUrl={activeCharacter?.avatarUrl || defaultAvatarUrl}
-          modelUrl={activeCharacter?.modelUrl}
           name={activeCharacter?.name || "数字人"}
           emotionProfile={activeCharacter?.emotionProfile}
           avatarType={activeCharacter?.avatarType}
           avatarVideoProfile={activeCharacter?.avatarVideoProfile}
-          use3D={use3D}
           interaction={avatarInteraction}
         />
 
@@ -1974,10 +1945,6 @@ export function ChatPanel({
                 </button>
                 <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={isLoading}>
                   <Upload size={16} /> 导入记录
-                </button>
-                <button type="button" onClick={toggleAvatarMode}>
-                  {use3D ? <ImageIcon size={16} /> : <Box size={16} />}
-                  切换到 {use3D ? "2D" : "3D"}
                 </button>
                 {adultVerified ? (
                   <button type="button" onClick={disableAdultAccess}>

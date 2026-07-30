@@ -1,17 +1,14 @@
 import { useEffect, useState } from "react";
 import { Emotion, EmotionProfile, resolveMediaUrl } from "../services/api";
-import { Girlfriend3D } from "./Girlfriend3D";
 
 interface AvatarProps {
   emotion: Emotion;
   speaking: boolean;
   avatarUrl: string;
-  modelUrl?: string;
   name?: string;
   emotionProfile?: EmotionProfile;
   avatarType?: "image" | "video";
   avatarVideoProfile?: EmotionProfile;
-  use3D?: boolean;
   interaction?: "hug" | "hand" | "whisper" | "comfort" | "goodnight" | null;
 }
 
@@ -47,17 +44,6 @@ const classByEmotion: Record<Emotion, string> = {
   love: "face love"
 };
 
-function canCreateWebGlContext(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-    return Boolean(context);
-  } catch {
-    return false;
-  }
-}
-
 function makeStatusText(emotion: Emotion) {
   switch (emotion) {
     case "happy":
@@ -90,12 +76,10 @@ export function Avatar({
   emotion,
   speaking,
   avatarUrl,
-  modelUrl,
   name = "数字人",
   emotionProfile,
   avatarType,
   avatarVideoProfile,
-  use3D = true,
   interaction = null
 }: AvatarProps) {
   const emotionImageRaw = resolveEmotionImage(emotionProfile, emotion);
@@ -104,11 +88,6 @@ export function Avatar({
   const shouldShowVideo = avatarType === "video";
   const emotionVideo = shouldShowVideo ? resolveMediaUrl(resolveEmotionVideo(avatarVideoProfile, emotion) || undefined) : undefined;
   const [lipBeat, setLipBeat] = useState(false);
-  const [canRender3D, setCanRender3D] = useState(() => canCreateWebGlContext());
-
-  useEffect(() => {
-    setCanRender3D(canCreateWebGlContext());
-  }, []);
 
   useEffect(() => {
     if (!speaking) {
@@ -126,13 +105,10 @@ export function Avatar({
     };
   }, [speaking]);
 
-  const isModel3D = Boolean(use3D && canRender3D && modelUrl);
-
   return (
     <div
       className={`avatar emotion-${emotion} ${speaking ? "speaking" : ""} ${interaction ? `interaction-${interaction}` : ""}`}
-      data-avatar-mode={isModel3D ? "3d-model" : use3D && canRender3D ? "3d-procedural" : "2d"}
-      data-model-url={modelUrl || ""}
+      data-avatar-mode="2d"
     >
       <div className="avatar-topline">
         <div>
@@ -141,44 +117,39 @@ export function Avatar({
         </div>
         <div className="headphone" aria-hidden="true">🎧</div>
       </div>
-      {use3D && canRender3D ? (
-        <Girlfriend3D emotion={emotion} speaking={speaking} modelUrl={resolveMediaUrl(modelUrl)} />
-      ) : (
-        <div className="portrait-stage">
-          <img className="portrait" src={resolvedAvatar || avatarUrl} alt={name} />
-          <div className="portrait-emotion" aria-label={`${makeStatusText(emotion)}表情`}>
-            {emotionVideo ? (
-              <video
-                key={`${emotion}-${emotionVideo}`}
-                className={`face-video ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
-                src={emotionVideo}
-                autoPlay
-                muted
-                loop
-                playsInline
-              />
-            ) : emotionImage ? (
-              <img
-                className={`face-image ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
-                src={emotionImage}
-                alt={`${emotion} 表情`}
-              />
-            ) : (
-              <div
-                className={`${classByEmotion[emotion]} ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
-              >
-                {expressionByEmotion[emotion]}
-              </div>
-            )}
-          </div>
-          {interaction ? <div className="interaction-effect" aria-hidden="true">{interactionGlyph(interaction)}</div> : null}
-          <div className="portrait-caption">
-            <span>{makeStatusText(emotion)}</span>
-            <small>{speaking ? "正在对你说话" : "正在听你"}</small>
-          </div>
+      <div className="portrait-stage">
+        <img className="portrait" src={resolvedAvatar || avatarUrl} alt={name} />
+        <div className="portrait-emotion" aria-label={`${makeStatusText(emotion)}表情`}>
+          {emotionVideo ? (
+            <video
+              key={`${emotion}-${emotionVideo}`}
+              className={`face-video ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
+              src={emotionVideo}
+              autoPlay
+              muted
+              loop
+              playsInline
+            />
+          ) : emotionImage ? (
+            <img
+              className={`face-image ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
+              src={emotionImage}
+              alt={`${emotion} 表情`}
+            />
+          ) : (
+            <div
+              className={`${classByEmotion[emotion]} ${speaking ? "talking" : ""} ${lipBeat ? "lip-open" : "lip-close"}`}
+            >
+              {expressionByEmotion[emotion]}
+            </div>
+          )}
         </div>
-      )}
-      {use3D && canRender3D ? <div className="status">{makeStatusText(emotion)}</div> : null}
+        {interaction ? <div className="interaction-effect" aria-hidden="true">{interactionGlyph(interaction)}</div> : null}
+        <div className="portrait-caption">
+          <span>{makeStatusText(emotion)}</span>
+          <small>{speaking ? "正在对你说话" : "正在听你"}</small>
+        </div>
+      </div>
     </div>
   );
 }

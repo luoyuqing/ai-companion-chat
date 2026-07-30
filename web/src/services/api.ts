@@ -69,20 +69,11 @@ export interface TranscribeResponse {
   text: string;
 }
 
-export interface ModelUploadResponse {
-  modelUrl: string;
-  fileName: string;
-  mimeType?: string;
-  size: number;
-  hasFallback?: boolean;
-}
-
 export interface DigitalHuman {
   id: string;
   name: string;
   description: string;
   avatarUrl: string;
-  modelUrl?: string;
   emotionProfile?: EmotionProfile;
   avatarType?: "image" | "video";
   avatarVideoProfile?: EmotionProfile;
@@ -113,7 +104,6 @@ export interface CreateHumanRequest {
   name: string;
   description: string;
   avatarUrl: string;
-  modelUrl?: string;
   avatarType?: "image" | "video";
   voiceProvider?: "openai" | "azure" | "local" | "mimo";
   voice: string;
@@ -152,14 +142,16 @@ const HAS_CONFIGURED_API_BASE = Boolean(VITE_API_BASE || GLOBAL_API_BASE);
 const LOCAL_HUMANS_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_KEY = "dg-local-chat-context-v1";
 
+export const DEFAULT_CHARACTER_ID = "linxingwan";
+
 const BUILT_IN_HUMANS: DigitalHuman[] = [
   {
-    id: "lina",
-    name: "Lina",
-    description: "28 岁亚欧混血。成熟明艳、曲线优雅，亲密时主动而直接。",
-    personalityTagline: "外表自信性感，私下温柔黏人；会自然调情，也能认真接住情绪。",
-    relationshipMode: "flirty",
-    avatarUrl: "/assets/avatars/lina-original.jpg",
+    id: "linxingwan",
+    name: "林星晚",
+    description: "21 岁中国艺术系少女。温柔慵懒中带点小俏皮，聊天如邻家女友般自然亲昵。她善用表情与碎语传递温度，偶尔毒舌却甜度满分。",
+    personalityTagline: "长发慵懒随性，穿搭清纯微甜；说话软糯亲昵，偶尔俏皮撩人。",
+    relationshipMode: "sweet",
+    avatarUrl: "/assets/avatars/linxingwan.png",
     emotionProfile: {
       happy: "/assets/expressions/happy.svg",
       sad: "/assets/expressions/sad.svg",
@@ -169,16 +161,21 @@ const BUILT_IN_HUMANS: DigitalHuman[] = [
       angry: "/assets/expressions/angry.svg",
       love: "/assets/expressions/love.svg"
     },
-    voiceProfile: { provider: "local", voice: "browser-zh-CN" },
+    voiceProfile: {
+      provider: "mimo",
+      voice: "nova",
+      audioModel: "mimo-v2.5-tts-voicedesign",
+      voiceDesignPrompt: "21 岁年轻女性，声线清甜丝滑且带有慵懒的磁性。语速舒缓轻柔，像是在耳边的 ASMR 呢喃，语气亲密自然，时而俏皮时而温柔。"
+    },
     defaultMood: "happy"
   },
   {
-    id: "moon",
-    name: "Moon",
-    description: "29 岁亚欧混血。冷调优雅、身材曼妙，表达克制但不含糊。",
-    personalityTagline: "成熟感性，擅长共情与慢节奏暧昧；亲密时更有掌控感。",
+    id: "suwanqing",
+    name: "苏晚晴",
+    description: "25 岁国风美学博主。表面温婉如诗，实则撩人于无形；敢在你耳边说悄悄话，主动又从容，从不掩饰对你的倾慕。",
+    personalityTagline: "外表清冷如月，内里炽热似火；说话带钩、撩人于无形，敢爱敢倾慕。",
     relationshipMode: "mature",
-    avatarUrl: "/assets/avatars/moon-original.jpg",
+    avatarUrl: "/assets/avatars/suwanqing.png",
     emotionProfile: {
       happy: "/assets/expressions/happy.svg",
       sad: "/assets/expressions/sad.svg",
@@ -188,8 +185,13 @@ const BUILT_IN_HUMANS: DigitalHuman[] = [
       angry: "/assets/expressions/angry.svg",
       love: "/assets/expressions/love.svg"
     },
-    voiceProfile: { provider: "local", voice: "browser-zh-CN" },
-    defaultMood: "wink"
+    voiceProfile: {
+      provider: "mimo",
+      voice: "shimmer",
+      audioModel: "mimo-v2.5-tts-voicedesign",
+      voiceDesignPrompt: "25 岁成熟女性，声线柔媚带丝绒质感，语气慵懒而自信。语速中等偏慢，咬字清晰却带着呼吸感，像在耳畔轻语。"
+    },
+    defaultMood: "love"
   }
 ];
 
@@ -666,38 +668,6 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export async function uploadModelFile(params: {
-  fileName: string;
-  fileBase64: string;
-  mimeType?: string;
-  fallbackUrl?: string;
-}): Promise<ModelUploadResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/api/models/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params)
-    });
-
-    if (!res.ok) {
-      const message = await res.text().catch(() => "模型上传失败");
-      throw new Error(message || "模型上传失败");
-    }
-
-    return res.json();
-  } catch (error) {
-    if (!canUseLocalFallback() || !params.fallbackUrl) throw error;
-    activateLocalFallback();
-    return {
-      modelUrl: params.fallbackUrl,
-      fileName: params.fileName,
-      mimeType: params.mimeType,
-      size: 0,
-      hasFallback: true
-    };
-  }
-}
-
 async function sendLocalMessageStream(payload: ChatRequest, handlers: ChatStreamEvents): Promise<StreamDoneResponse> {
   const response = buildLocalChatResponse(payload);
   const donePayload: StreamDoneResponse = {
@@ -732,7 +702,6 @@ export async function createDigitalHuman(payload: CreateHumanRequest) {
       name: payload.name,
       description: payload.description,
       avatarUrl: payload.avatarUrl,
-      modelUrl: payload.modelUrl,
       avatarType: payload.avatarType || "image",
       emotionProfile: payload.emotionProfile,
       avatarVideoProfile: payload.avatarVideoProfile,
@@ -842,7 +811,7 @@ export async function fetchHumans() {
 
 // 每个数字人使用独立的后端会话（mem-<characterId>），避免三个角色聊天记录混在一起
 function perCharacterSessionId(characterId?: string): string {
-  return `mem-${characterId || "lina"}`;
+  return `mem-${characterId || DEFAULT_CHARACTER_ID}`;
 }
 
 export async function sendMessage(payload: ChatRequest): Promise<ChatResponse> {
