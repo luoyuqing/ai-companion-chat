@@ -207,17 +207,33 @@ export async function runPhotoTask(opts: {
   /** 轮询超时时间（毫秒），默认 POLL_TIMEOUT_MS。超时抛出 PhotoTimeoutError。 */
   timeoutMs?: number;
 }): Promise<PhotoResult> {
+  const tag = `[RB][${opts.character.name}]`;
+  const t0 = Date.now();
+  console.log(`${tag} 生图开始`);
+
   const cfg = getRunningHubConfig();
   const apiKey = cfg.apiKey || process.env.RUNNINGHUB_API_KEY;
-  if (!apiKey) throw new Error("未配置 RunningHub API Key（请在系统设置页填写）");
+  if (!apiKey) {
+    console.error(`${tag} 未配置 RunningHub API Key（请在系统设置页填写）`);
+    throw new Error("未配置 RunningHub API Key（请在系统设置页填写）");
+  }
 
   const avatarPath = resolveAvatarPath(opts.character);
-  if (!avatarPath) throw new Error("未找到数字人头像，无法生图");
+  if (!avatarPath) {
+    console.error(`${tag} 未找到数字人头像，无法生图`);
+    throw new Error("未找到数字人头像，无法生图");
+  }
 
+  console.log(`${tag} 正在生成生图提示词…`);
   const prompt = await generatePhotoPrompt(opts.character, opts.recentMessages);
+  // 关键：把实际提交给 RunningHub 的提示词落到日志，便于事后核查每个数字人发了什么
+  console.log(`${tag} 提交提示词 → ${prompt}`);
 
   const fileName = await rhUploadImage(apiKey, avatarPath);
+  console.log(`${tag} 头像已上传 fileName=${fileName}`);
+
   const taskId = await rhSubmit(apiKey, fileName, prompt);
+  console.log(`${tag} 任务已提交 taskId=${taskId}`);
 
   // 8s 轮询，直到 SUCCESS / FAILED / 超时（超时时长可经 timeoutMs 配置，默认 POLL_TIMEOUT_MS）
   let imageUrl: string | null = null;
@@ -228,13 +244,18 @@ export async function runPhotoTask(opts: {
     const r = await rhQuery(apiKey, taskId);
     if (r.status === "SUCCESS") {
       imageUrl = r.results?.[0]?.url ?? null;
+      console.log(`${tag} 轮询=SUCCESS 图片URL=${imageUrl}`);
       break;
     }
     if (r.status === "FAILED") {
+      console.error(`${tag} 生图失败 status=FAILED errorMessage=${r.errorMessage || ""} failedReason=${JSON.stringify(r.failedReason || {})}`);
       throw new Error(`生图失败：${r.errorMessage || JSON.stringify(r.failedReason || {}).slice(0, 160)}`);
     }
   }
-  if (!imageUrl) throw new PhotoTimeoutError(`生图超时（超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成）`);
+  if (!imageUrl) {
+    console.error(`${tag} 生图超时（超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成）taskId=${taskId}`);
+    throw new PhotoTimeoutError(`生图超时（超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成）`);
+  }
 
   // 下载 ZIP → 解压 → 取首张图片
   const tmpDir = path.join(os.tmpdir(), `dg-photo-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -245,6 +266,7 @@ export async function runPhotoTask(opts: {
     await execFileAsync("unzip", ["-o", zipPath, "-d", tmpDir]);
     const img = findFirstImage(tmpDir);
     if (!img) throw new Error("生图结果中未找到图片文件");
+    console.log(`${tag} 生图完成 本地图=${img} 总耗时=${((Date.now() - t0) / 1000).toFixed(1)}s`);
     return {
       imagePath: img,
       cleanup: () => cleanupDir(tmpDir)

@@ -336,9 +336,12 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
   }
 
   // 判断消息是否包含任一触发词（可配置多个，至少保留���个）
-  function containsTrigger(text: string, words?: string[]): boolean {
-    if (!words || words.length === 0) return false;
-    return words.some((w) => w && text.includes(w));
+  function containsTrigger(text: string, words?: string[]): string | null {
+    if (!words || words.length === 0) return null;
+    for (const w of words) {
+      if (w && text.includes(w)) return w;
+    }
+    return null;
   }
 
   // 将拍照等待期用户发来的消息记为「未读」（仅落盘到会话历史，不触发回复）
@@ -375,7 +378,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
       errMsg = err instanceof Error ? err.message : String(err);
       // 打印完整报错信息与堆栈，便于排查 RunningHub 接口异常
       console.error(
-        `[拍照] ${outcome === "timeout" ? "超时" : "接口报错"}:`,
+        `[RB][${character.name}] ${outcome === "timeout" ? "超时" : "接口报错"}:`,
         errMsg,
         err instanceof Error && err.stack ? `\n${err.stack}` : ""
       );
@@ -398,7 +401,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         const result = await runChatWithContext(ctx, backMessage);
         await replyWithTextAndVoice(ctx, result.text, result.character);
       } catch (replyErr) {
-        console.error("[拍照] 照片后统一回复失败:", replyErr);
+        console.error(`[RB][${character.name}] 照片后统一回复失败:`, replyErr);
         await ctx.reply("（刚才去拍照啦，这会儿有点忙不过来，你再说一遍好不好~）").catch(() => {});
       }
     } finally {
@@ -1094,11 +1097,13 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
 
       // ---------- 触发词检测（可配置多个，至少保留一个）----------
       const rhCfg = getRunningHubConfig();
-      if (containsTrigger(text, rhCfg.triggerWords)) {
+      const hit = containsTrigger(text, rhCfg.triggerWords);
+      if (hit) {
         const character = await currentCharacter(ctx);
         if (!character) {
           return ctx.reply("请先用 /list 选择一个数字人再聊天。");
         }
+        console.log(`[RB][${character.name}] 触发生图 触发词=${hit} chatId=${ctx.chat?.id}`);
         photoPending.add(sid);
         // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
         await recordUnread(sid, text);
