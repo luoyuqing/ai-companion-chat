@@ -1132,7 +1132,7 @@ export function ChatPanel({
     relationshipMode: "sweet" as (typeof relationshipModes)[number],
     personalityTagline: "",
     telegramBotToken: "",
-    proactive: { enabled: false, timePoints: [] as string[], mode: "always" }
+    proactive: { enabled: false, timePoints: [] as string[], mode: "always", voiceEnabled: false }
   });
   const [isEditSaving, setIsEditSaving] = useState(false);
   const [editStatus, setEditStatus] = useState("");
@@ -1217,9 +1217,10 @@ export function ChatPanel({
             timePoints: Array.isArray(activeCharacter.proactive.timePoints)
               ? activeCharacter.proactive.timePoints.slice(0, 3)
               : [],
-            mode: activeCharacter.proactive.mode === "smart" ? "smart" : "always"
+            mode: activeCharacter.proactive.mode === "smart" ? "smart" : "always",
+            voiceEnabled: Boolean(activeCharacter.proactive.voiceEnabled)
           }
-        : { enabled: false, timePoints: [], mode: "always" }
+        : { enabled: false, timePoints: [], mode: "always", voiceEnabled: false }
     });
     setEditStatus("");
   }, [activeCharacter?.id]);
@@ -2013,7 +2014,8 @@ export function ChatPanel({
         proactive: {
           enabled: editForm.proactive.enabled,
           timePoints: editForm.proactive.timePoints.filter((t) => !!t).slice(0, 3),
-          mode: editForm.proactive.mode as "always" | "smart"
+          mode: editForm.proactive.mode as "always" | "smart",
+          voiceEnabled: editForm.proactive.voiceEnabled
         }
       });
       onUpdate(human);
@@ -2117,7 +2119,8 @@ export function ChatPanel({
       proactive: {
         enabled: form.proactive.enabled,
         timePoints: form.proactive.timePoints.filter((t) => !!t).slice(0, 3),
-        mode: form.proactive.mode
+        mode: form.proactive.mode,
+        voiceEnabled: form.proactive.voiceEnabled
       },
       ...(emotionProfile ? { emotionProfile } : {}),
       ...(avatarVideoProfile ? { avatarVideoProfile } : {})
@@ -2561,6 +2564,20 @@ export function ChatPanel({
                     <option value="smart">智能判断（按人设/关系/上下文决定是否发）</option>
                   </select>
                 </label>
+
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={editForm.proactive.voiceEnabled}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        proactive: { ...prev.proactive, voiceEnabled: e.target.checked }
+                      }))
+                    }
+                  />
+                  主动推送附带语音（消耗 MiMo TTS 额度，默认关）
+                </label>
               </>
             ) : null}
 
@@ -2839,6 +2856,20 @@ export function ChatPanel({
                     <option value="always">到点必发</option>
                     <option value="smart">智能判断（按人设/关系/上下文决定是否发）</option>
                   </select>
+                </label>
+
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={form.proactive.voiceEnabled}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        proactive: { ...prev.proactive, voiceEnabled: e.target.checked }
+                      }))
+                    }
+                  />
+                  主动推送附带语音（消耗 MiMo TTS 额度，默认关）
                 </label>
               </>
             ) : null}

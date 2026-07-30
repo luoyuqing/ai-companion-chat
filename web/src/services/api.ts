@@ -94,6 +94,7 @@ export interface DigitalHuman {
     enabled: boolean;
     timePoints: string[];
     mode: "always" | "smart";
+    voiceEnabled?: boolean;
   };
 }
 
@@ -131,6 +132,7 @@ export interface CreateHumanRequest {
     enabled: boolean;
     timePoints: string[];
     mode: "always" | "smart";
+    voiceEnabled?: boolean;
   };
 }
 

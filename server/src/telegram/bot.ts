@@ -6,7 +6,7 @@ import dns from "node:dns";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api } from "grammy";
 
 import { runChat, generateMemoryForSession } from "../core/chat";
 import {
@@ -187,36 +187,53 @@ async function oggToWavBase64(oggPath: string): Promise<{ base64: string; mime: 
   return { base64: buf.toString("base64"), mime: "audio/wav" };
 }
 
+// 纯 API 版「文本 + 可选语音」发送：供交互聊天（ctx 包裹）与主动推送（无 ctx）共用。
+// voiceEnabled=false 时只发文字，不消耗 TTS 额度（主动推送默认关闭以省额度）。
+async function sendTextWithOptionalVoice(
+  api: Api<BotContext>,
+  chatId: number,
+  text: string,
+  character: DigitalHumanConfig,
+  voiceEnabled: boolean
+): Promise<void> {
+  await api.sendMessage(chatId, text.slice(0, 4000));
+  if (!voiceEnabled) return;
+  try {
+    const audioUrl = await synthesizeSpeech(text, character);
+    if (!audioUrl) return;
+    const audioPath = audioUrlToPath(audioUrl);
+    if (!audioPath) return;
+    if (!(await fs.stat(audioPath).catch(() => null))) return;
+    // Telegram 语音消息仅支持 OGG/Opus 容器，MiMo 产出的是 MP3，需转码
+    const oggPath = path.join(
+      os.tmpdir(),
+      `dg-voice-${Date.now()}-${Math.random().toString(16).slice(2)}.ogg`
+    );
+    try {
+      await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
+      await api.sendVoice(chatId, new InputFile(oggPath));
+      await fs.unlink(oggPath).catch(() => {});
+    } catch (convErr) {
+      console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
+      await api.sendAudio(chatId, new InputFile(audioPath));
+    }
+    await fs.unlink(audioPath).catch(() => {});
+  } catch (err) {
+    console.warn("TG 语音合成失败：", err instanceof Error ? err.message : err);
+  }
+}
+
 async function replyWithTextAndVoice(
   ctx: BotContext,
   text: string,
   character: DigitalHumanConfig
 ): Promise<void> {
-  await ctx.reply(text.slice(0, 4000));
-  if (!ctx.session.voiceEnabled) return;
-  try {
-    const audioUrl = await synthesizeSpeech(text, character);
-    if (!audioUrl) return;
-    const audioPath = audioUrlToPath(audioUrl);
-    if (audioPath && (await fs.stat(audioPath).catch(() => null))) {
-      // Telegram 语音消息仅支持 OGG/Opus 容器，MiMo 产出的是 MP3，需转码
-      const oggPath = path.join(
-        os.tmpdir(),
-        `dg-voice-${Date.now()}-${Math.random().toString(16).slice(2)}.ogg`
-      );
-      try {
-        await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
-        await ctx.replyWithVoice(new InputFile(oggPath));
-        await fs.unlink(oggPath).catch(() => {});
-      } catch (convErr) {
-        console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
-        await ctx.replyWithAudio(new InputFile(audioPath));
-      }
-      await fs.unlink(audioPath).catch(() => {});
-    }
-  } catch (err) {
-    console.warn("TG 语音合成失败：", err instanceof Error ? err.message : err);
+  const chatId = ctx.chat?.id;
+  if (chatId == null) {
+    await ctx.reply(text.slice(0, 4000));
+    return;
   }
+  await sendTextWithOptionalVoice(ctx.api, chatId, text, character, ctx.session.voiceEnabled);
 }
 
 // ---------- wizard builders ----------
@@ -1039,17 +1056,19 @@ export function getCharacterBot(characterId: string): Bot<BotContext> | undefine
   return characterBots.get(characterId);
 }
 
-// 主动推送：让某角色专属 bot 给主人发一条消息。返回是否发送成功。
-export async function sendProactiveToOwner(characterId: string, text: string): Promise<boolean> {
-  const bot = characterBots.get(characterId);
+// 主动推送：让某角色专属 bot 给主人发一条消息（文本，可选带语音）。返回是否发送成功。
+export async function sendProactiveToOwner(character: DigitalHumanConfig, text: string): Promise<boolean> {
+  const bot = characterBots.get(character.id);
   if (!bot) return false;
   const ownerId = loadOwner();
   if (ownerId == null) return false;
+  // 语音默认关闭，避免每条定时消息都消耗 MiMo TTS 额度；在角色「主动推送」设置里可开启。
+  const voiceEnabled = character.proactive?.voiceEnabled ?? false;
   try {
-    await bot.api.sendMessage(ownerId, text);
+    await sendTextWithOptionalVoice(bot.api, ownerId, text, character, voiceEnabled);
     return true;
   } catch (err) {
-    console.error(`主动向主人推送失败 (${characterId}):`, err);
+    console.error(`主动向主人推送失败 (${character.id}):`, err);
     return false;
   }
 }

@@ -8,8 +8,12 @@ import { sendProactiveToOwner } from "./bot";
 // 主动推送按北京时间解释时间点，避免服务器时区（KST）与用户（中国）不一致导致错位。
 const PROACTIVE_TZ = "Asia/Shanghai";
 
-// 记录每个 (角色:时间点) 最近一次已发送的 "YYYY-MM-DD HH:MM"，进程内去重，避免同分钟重复发送。
+// 记录每个 (角色:时间点) 的发送状态，进程内去重，避免同分钟重复发送（连发两条）。
+// 取值：
+//   "IN_FLIGHT"     —— 本轮 tick 正在生成文案/发送中（in-flight 锁），下一轮轮询必须跳过，防止慢 LLM/慢网络下竞态连发。
+//   "YYYY-MM-DD HH:MM" —— 该分钟已成功发送（或已决策不打扰/发送失败），本分钟不再处理。
 const sentMarkers = new Map<string, string>();
+const IN_FLIGHT = "IN_FLIGHT";
 
 function shanghaiNow(): { hm: string; dayKey: string } {
   const parts = new Intl.DateTimeFormat("zh-CN", {
@@ -134,25 +138,34 @@ async function tick(): Promise<void> {
     if (!timePoints.includes(hm)) continue;
     const markerKey = `${c.id}:${hm}`;
     const marker = `${dayKey} ${hm}`;
-    if (sentMarkers.get(markerKey) === marker) continue; // 本次已发过，去重
+    const existing = sentMarkers.get(markerKey);
+    if (existing === marker) continue;        // 该分钟已成功发送（或已决策不打扰/失败），去重
+    if (existing === IN_FLIGHT) continue;      // 上一轮 tick 正在生成/发送中，跳过，避免竞态连发
+
+    // 进入发送流程前先占位（in-flight 锁）：即使本次 LLM/网络较慢、超过 30s 轮询间隔，
+    // 下一轮 tick 在标记写成最终值前会看到 IN_FLIGHT 而跳过，彻底杜绝连发两条。
+    sentMarkers.set(markerKey, IN_FLIGHT);
 
     const decision = await generateProactiveText(c, c.proactive.mode);
     const shouldSend = c.proactive.mode === "always" ? true : decision.send;
     if (!shouldSend || !decision.message.trim()) {
-      // 即使不发也标记，避免 smart 模式每分钟反复决策
+      // 即使不发也标记为本分钟已决策，避免 smart 模式每分钟反复决策
       sentMarkers.set(markerKey, marker);
       continue;
     }
 
-    const ok = await sendProactiveToOwner(c.id, decision.message.trim());
+    const ok = await sendProactiveToOwner(c, decision.message.trim());
     if (ok) {
-      sentMarkers.set(markerKey, marker);
+      sentMarkers.set(markerKey, marker); // 成功：打最终标记，本分钟不再处理
       // 把主动消息写回会话，使网页/TG 历史一致、并影响后续上下文
       try {
         await appendToSession(`mem-${c.id}`, { role: "assistant", content: decision.message.trim() });
       } catch (err) {
         console.error(`主动消息写回会话失败 (${c.id}):`, err);
       }
+    } else {
+      // 发送失败：本分钟不再重试（避免 Telegram 实际已收到却重试造成连发）。下一分钟（新 marker）会重新触发。
+      sentMarkers.set(markerKey, marker);
     }
   }
 }

@@ -63,6 +63,8 @@ export interface ProactiveConfig {
   // 最多 3 个时间点，格式 "HH:MM"（24 小时制，按 Asia/Shanghai 时区解释）
   timePoints: string[];
   mode: ProactiveMode;
+  // 主动推送是否附带语音（复用 MiMo TTS）。默认关闭，避免每条定时消息都消耗语音额度。
+  voiceEnabled?: boolean;
 }
 
 export interface ChatRequestBody {
