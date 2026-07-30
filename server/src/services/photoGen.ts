@@ -16,8 +16,9 @@ const APP_ID = "2075560920047575042";
 const POLL_INTERVAL_MS = 8000;
 const POLL_TIMEOUT_MS = 150000;
 
-// 生图提示词兜底（LLM 不可用或无上下文时使用）
-const DEFAULT_PHOTO_PROMPT =
+// ⚠️ 仅作为「风格 / 格式」示范写入 LLM 的 system prompt，严禁作为实际提示词原话发送给 RunningHub。
+// 真实提示词必须由 LLM 依据数字人人设创作；上下文不足时由 LLM 随机生成衣着 / 环境 / 姿势。
+const PROMPT_STYLE_EXAMPLE =
   "女人全身只穿着一件白色的男士衬衣，跪在床上，双腿自然张开，正在自拍，摆出可爱的自拍手势，柔和光线，全身构图";
 
 function sleep(ms: number): Promise<void> {
@@ -117,7 +118,9 @@ export async function generatePhotoPrompt(
   recentMessages: ChatMessage[]
 ): Promise<string> {
   const client = getOpenAiClient();
-  if (!client) return DEFAULT_PHOTO_PROMPT;
+  if (!client) {
+    throw new Error("未配置 LLM 通道，无法生成生图提示词（请检查系统 LLM 配置）");
+  }
 
   const identity = `名字：${character.name}\n设定：${character.description}`;
   const context = recentMessages
@@ -130,17 +133,23 @@ export async function generatePhotoPrompt(
     `你是「${character.name}」的写真提示词撰写助手。根据她的身份设定与当前对话上下文，撰写一段英文生图提示词，` +
     `描述她的衣着、所处环境、身体姿势与镜头角度。\n` +
     `规则：\n` +
-    `1. 若上下文里她描述过自己的衣着 / 环境 / 姿势，务必贴合这些描述；若没有，则自行合理生成` +
-    `（例如：女人全身只穿着一件白色的男士衬衣，跪在床上，双腿自然张开，正在自拍，摆出可爱的自拍手势）。\n` +
-    `2. 允许成人 / NSFW 内容，描写可以直白。\n` +
-    `3. 只输出提示词本身，不要任何解释，不要用引号包裹。`;
+    `1. 若上下文里她描述过自己的衣着 / 环境 / 姿势，务必贴合这些描述。\n` +
+    `2. 若上下文没有这些要素，必须依据她的「身份设定」自行创作，并随机生成衣着、环境、姿势——` +
+    `每次生成都要不一样、有新鲜感，禁止千篇一律。\n` +
+    `3. 允许成人 / NSFW 内容，描写可以直白。\n` +
+    `4. 只输出提示词本身，不要任何解释，不要用引号包裹。\n` +
+    `5. 下面只是一段「风格 / 格式」示范，仅供体会语气与结构，` +
+    `严禁原样照搬或高度相似地翻写，你必须独立创作：\n` +
+    `   示范：${PROMPT_STYLE_EXAMPLE}`;
 
-  const user = `${identity}\n\n【最近对话】\n${context || "（无）"}\n\n请撰写生图提示词：`;
+  const user =
+    `${identity}\n\n【最近对话】\n${context || "（无）"}\n\n` +
+    `请基于她的身份创作一段全新的生图提示词（衣着 / 环境 / 姿势请随机变化，不要重复）：`;
 
   try {
     const completion = await client.chat.completions.create({
       model: resolveLlmModel(),
-      temperature: 0.9,
+      temperature: 0.95,
       stream: false,
       messages: [
         { role: "system", content: system },
@@ -148,10 +157,12 @@ export async function generatePhotoPrompt(
       ]
     });
     const text = completion.choices?.[0]?.message?.content?.trim();
-    return text || DEFAULT_PHOTO_PROMPT;
+    if (!text) throw new Error("LLM 返回的生图提示词为空");
+    return text;
   } catch (err) {
-    console.error("生成生图提示词失败，使用兜底：", err);
-    return DEFAULT_PHOTO_PROMPT;
+    // 绝不回退到默认提示词原话：直接抛出，交由上层走「生图失败」分支（保留完整报错供日志排查）
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`生成生图提示词失败：${msg}`);
   }
 }
 
