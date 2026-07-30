@@ -228,12 +228,14 @@ function CharacterForm({
   mode,
   initial,
   onSubmit,
-  onCancel
+  onCancel,
+  onSaved
 }: {
   mode: "create" | "edit";
   initial?: DigitalHuman;
   onSubmit: (payload: CreateHumanRequest) => Promise<DigitalHuman>;
   onCancel: () => void;
+  onSaved?: (msg: string) => void;
 }) {
   const [form, setForm] = useState<NewCharacterForm>(() => (initial ? fromCharacter(initial) : defaultForm()));
   const [status, setStatus] = useState("");
@@ -334,8 +336,16 @@ function CharacterForm({
           // 记忆保存失败不影响数字人本身的创建/更新
         }
       }
-      setStatus(mode === "create" ? "已创建 ✓" : "已保存 ✓");
-      onCancel();
+      const restartHint = form.telegramBotToken.trim()
+        ? "（已配置 TG Token，请到「重启服务」重启后生效）"
+        : "";
+      if (onSaved) {
+        // 由父级在列表页展示成功提示并切回列表，避免表单卸载导致提示丢失
+        onSaved((mode === "create" ? "已创建数字人 ✓" : "已保存修改 ✓") + restartHint);
+      } else {
+        setStatus(mode === "create" ? "已创建 ✓" : "已保存 ✓");
+        onCancel();
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "保存失败，请重试");
     } finally {
@@ -682,6 +692,13 @@ export function DigitalHumanManager({
     setStatus("");
   };
 
+  // 创建/编辑成功后：在列表页持久展示成功提示（不立即清空），并切回列表
+  const handleSaved = (msg: string) => {
+    setStatus(msg);
+    setEditing(null);
+    setView("grid");
+  };
+
   const handleCreate = async (payload: CreateHumanRequest): Promise<DigitalHuman> => {
     const created = await createDigitalHuman(payload);
     onCharactersChange([...characters, created.human]);
@@ -725,10 +742,10 @@ export function DigitalHumanManager({
   };
 
   if (view === "create") {
-    return <CharacterForm mode="create" onSubmit={handleCreate} onCancel={back} />;
+    return <CharacterForm mode="create" onSubmit={handleCreate} onCancel={back} onSaved={handleSaved} />;
   }
   if (view === "edit") {
-    return <CharacterForm mode="edit" initial={editing ?? undefined} onSubmit={handleEdit} onCancel={back} />;
+    return <CharacterForm mode="edit" initial={editing ?? undefined} onSubmit={handleEdit} onCancel={back} onSaved={handleSaved} />;
   }
 
   return (
