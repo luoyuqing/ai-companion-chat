@@ -31,6 +31,7 @@ import {
 } from "../core/scenes";
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
+import { runPhotoTask } from "../services/photoGen";
 import { clearSession, importSession, loadSession, updateSessionMeta } from "../services/session";
 import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
 
@@ -327,6 +328,22 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         adultVerified: ctx.session.adultVerified
       })
     );
+  }
+
+  // 处理【拍张照】生图请求：异步生成并发送，不阻塞正常聊天回复
+  async function handlePhotoRequest(ctx: BotContext, character: DigitalHumanConfig): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (chatId == null) return;
+    await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
+    await ctx.reply("📷 姐姐这就去拍，稍等一下下哦~");
+    const session = await loadSession(chatSessionId(ctx));
+    const recent = (session?.history ?? []).slice(-12);
+    const res = await runPhotoTask({ character, recentMessages: recent });
+    try {
+      await ctx.api.sendPhoto(chatId, new InputFile(res.imagePath));
+    } finally {
+      res.cleanup();
+    }
   }
 
   bot.use(session({ initial: (): BotSessionData => ({ voiceEnabled: true }) }));
@@ -1011,6 +1028,15 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
       try {
         const result = await runChatWithContext(ctx, text);
         await replyWithTextAndVoice(ctx, result.text, result.character);
+
+        // 【拍张照】触发生图（异步，不阻塞聊天回复；按数字人隔离：各自头像/会话/独立 bot）
+        if (text.includes("拍张照")) {
+          void handlePhotoRequest(ctx, result.character).catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error("拍照生图失败:", msg);
+            ctx.reply(`📷 拍照失败：${msg.slice(0, 120)}`).catch(() => {});
+          });
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "NO_CHARACTER") {

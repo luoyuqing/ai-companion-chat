@@ -26,7 +26,7 @@ import {
  * - 令牌只保存在内存（不落 localStorage/sessionStorage），刷新页面即需重新输入密码。
  */
 
-type Tab = "humans" | "llm" | "tts" | "prompts" | "security" | "service";
+type Tab = "humans" | "llm" | "tts" | "photo" | "prompts" | "security" | "service";
 
 const PROMPT_FIELDS: Array<{ key: keyof Omit<PromptSettings, "sceneHints">; label: string; rows?: number }> = [
   { key: "globalSystem", label: "全局系统提示词", rows: 10 },
@@ -82,6 +82,9 @@ export function SettingsPage({
   // TTS 表单
   const [ttsApiKey, setTtsApiKey] = useState("");
 
+  // 生图（RunningHub）表单
+  const [rhApiKey, setRhApiKey] = useState("");
+
   // 提示词表单
   const [prompts, setPrompts] = useState<PromptSettings | null>(null);
 
@@ -97,6 +100,7 @@ export function SettingsPage({
     setLlmVision(Boolean(data.llm.supportsVision));
     setLlmApiKey("");
     setTtsApiKey("");
+    setRhApiKey("");
     setPrompts(data.prompts);
   };
 
@@ -178,6 +182,17 @@ export function SettingsPage({
       const data = await saveSettings({ tts: { apiKey: ttsApiKey.trim() } });
       applySettings(data);
       flash("TTS 密钥已保存");
+    });
+
+  const saveRh = () =>
+    guard(async () => {
+      if (!rhApiKey.trim()) {
+        flash("未输入新的 API Key，无需保存");
+        return;
+      }
+      const data = await saveSettings({ runningHub: { apiKey: rhApiKey.trim() } });
+      applySettings(data);
+      flash("RunningHub 密钥已保存");
     });
 
   const savePrompts = () =>
@@ -307,6 +322,7 @@ export function SettingsPage({
           <button type="button" className={tab === "humans" ? "active" : ""} onClick={() => setTab("humans")}>数字人管理</button>
           <button type="button" className={tab === "llm" ? "active" : ""} onClick={() => setTab("llm")}>LLM 模型</button>
           <button type="button" className={tab === "tts" ? "active" : ""} onClick={() => setTab("tts")}>语音 TTS</button>
+          <button type="button" className={tab === "photo" ? "active" : ""} onClick={() => setTab("photo")}>生图 RunningHub</button>
           <button type="button" className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}>提示词</button>
           <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>安全</button>
           <button type="button" className={tab === "service" ? "active" : ""} onClick={() => setTab("service")}>重启服务</button>
@@ -401,6 +417,26 @@ export function SettingsPage({
                 </label>
                 <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveTts()}>
                   <Save size={16} /> 保存 TTS 密钥
+                </button>
+              </section>
+            ) : null}
+
+            {tab === "photo" ? (
+              <section className="settings-section">
+                <label className="settings-field">
+                  <span>RunningHub API Key（{settings.runningHub?.hasApiKey ? "已配置，留空表示不修改" : "未配置"}）</span>
+                  <input
+                    type="password"
+                    value={rhApiKey}
+                    onChange={(e) => setRhApiKey(e.target.value)}
+                    placeholder={settings.runningHub?.hasApiKey ? "••••••••（留空保持不变）" : "32 位 API Key"}
+                  />
+                </label>
+                <p className="settings-lock-tip">
+                  用于在 Telegram 聊天中发送「拍张照」时调用 RunningHub 生图：以该数字人头像为输入，生成写实照片回传。密钥仅保存在服务器 system-config.json，不会回传前端。
+                </p>
+                <button type="button" className="settings-primary-btn" disabled={busy} onClick={() => void saveRh()}>
+                  <Save size={16} /> 保存 RunningHub 密钥
                 </button>
               </section>
             ) : null}

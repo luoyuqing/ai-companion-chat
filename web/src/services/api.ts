@@ -1074,15 +1074,21 @@ export interface PromptSettings {
   summaryPrompt: string;
 }
 
+export interface SettingsRunningHub {
+  hasApiKey: boolean;
+}
+
 export interface SystemSettings {
   llm: SettingsLlm;
   tts: SettingsTts;
+  runningHub: SettingsRunningHub;
   prompts: PromptSettings;
 }
 
 export interface SaveSettingsInput {
   llm?: { baseUrl?: string; apiKey?: string; model?: string; supportsVision?: boolean };
   tts?: { apiKey?: string };
+  runningHub?: { apiKey?: string };
   prompts?: PromptSettings;
 }
 

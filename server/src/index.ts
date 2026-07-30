@@ -105,7 +105,7 @@ app.get("/api/settings", (_req, res) => {
 app.put("/api/settings", (req, res) => {
   const body = (req.body || {}) as SystemConfigInput;
   try {
-    saveSystemConfig({ llm: body.llm, tts: body.tts, prompts: body.prompts });
+    saveSystemConfig({ llm: body.llm, tts: body.tts, runningHub: body.runningHub, prompts: body.prompts });
     res.json({ ...publicSystemConfig(), prompts: getPromptConfig() });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "保存设置失败" });

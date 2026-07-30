@@ -33,17 +33,24 @@ export interface TtsConfig {
   voice: string;
 }
 
+export interface RunningHubConfig {
+  /** RunningHub 生图接口 Bearer Key（设置页可配置，亦可走 RUNNINGHUB_API_KEY 环境变量） */
+  apiKey: string;
+}
+
 export interface SystemConfig {
   llm: LlmConfig;
   tts: TtsConfig;
+  runningHub: RunningHubConfig;
   // 扩展位：后续新增的菜单/配置项统一挂载到根级字段，保持向后兼容
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: unknown;
 }
 
-export type PublicSystemConfig = Omit<SystemConfig, "llm" | "tts"> & {
+export type PublicSystemConfig = Omit<SystemConfig, "llm" | "tts" | "runningHub"> & {
   llm: LlmConfig & { hasApiKey: boolean };
   tts: TtsConfig & { hasApiKey: boolean };
+  runningHub: { hasApiKey: boolean };
 };
 
 const CONFIG_FILE = path.join(DATA_DIR, "system-config.json");
@@ -71,6 +78,9 @@ function buildDefaults(): SystemConfig {
       apiKey: envString(process.env.MIMO_API_KEY),
       model: envString(process.env.MIMO_TTS_MODEL) || MIMO_TTS_MODEL,
       voice: envString(process.env.MIMO_TTS_VOICE) || MIMO_DEFAULT_VOICE
+    },
+    runningHub: {
+      apiKey: envString(process.env.RUNNINGHUB_API_KEY)
     }
   };
 }
@@ -100,6 +110,13 @@ function deepMergeTts(base: TtsConfig, override?: Partial<TtsConfig>): TtsConfig
   };
 }
 
+function deepMergeRunningHub(base: RunningHubConfig, override?: Partial<RunningHubConfig>): RunningHubConfig {
+  if (!override) return base;
+  return {
+    apiKey: override.apiKey !== undefined ? String(override.apiKey) : base.apiKey
+  };
+}
+
 function loadConfig(): SystemConfig {
   const defaults = buildDefaults();
   try {
@@ -109,6 +126,7 @@ function loadConfig(): SystemConfig {
         ...defaults,
         llm: deepMergeLlm(defaults.llm, raw.llm),
         tts: deepMergeTts(defaults.tts, raw.tts),
+        runningHub: deepMergeRunningHub(defaults.runningHub, raw.runningHub),
         prompts: raw.prompts
       };
     }
@@ -131,6 +149,10 @@ export function getTtsConfig(): TtsConfig {
   return getSystemConfig().tts;
 }
 
+export function getRunningHubConfig(): RunningHubConfig {
+  return getSystemConfig().runningHub;
+}
+
 export interface LlmConfigInput {
   baseUrl?: string;
   /** 提供空字符串表示清除；字段缺失表示保留 */
@@ -147,6 +169,7 @@ export interface TtsConfigInput {
 export interface SystemConfigInput {
   llm?: LlmConfigInput;
   tts?: TtsConfigInput;
+  runningHub?: { apiKey?: string };
   /** 用户覆盖的提示词（来自网页端「提示词」设置）。传 undefined 表示保留现有值；传 {} 表示清除覆盖、恢复默认 */
   prompts?: unknown;
 }
@@ -156,7 +179,8 @@ export function saveSystemConfig(input: SystemConfigInput): SystemConfig {
   const next: SystemConfig = {
     ...current,
     llm: deepMergeLlm(current.llm, input.llm),
-    tts: deepMergeTts(current.tts, input.tts)
+    tts: deepMergeTts(current.tts, input.tts),
+    runningHub: deepMergeRunningHub(current.runningHub, input.runningHub)
   };
   // prompts 覆盖：传 undefined 保留现有；传 {} 或具体值则覆盖（含空对象即视为清除自定义）
   if (input.prompts !== undefined) {
@@ -207,6 +231,9 @@ export function publicSystemConfig(): PublicSystemConfig {
       model: cfg.tts.model,
       voice: cfg.tts.voice,
       hasApiKey: Boolean(cfg.tts.apiKey)
+    },
+    runningHub: {
+      hasApiKey: Boolean(cfg.runningHub.apiKey)
     }
   };
 }
