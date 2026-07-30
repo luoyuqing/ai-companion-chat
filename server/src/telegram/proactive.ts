@@ -1,4 +1,6 @@
-import { getCharacters } from "../core/data";
+import fs from "node:fs";
+import path from "node:path";
+import { getCharacters, DATA_DIR } from "../core/data";
 import { loadSession, appendToSession } from "../services/session";
 import { getOpenAiClient, resolveLlmModel } from "../services/llm";
 import { getUserMemory } from "../services/userMemory";
@@ -8,12 +10,62 @@ import { sendProactiveToOwner } from "./bot";
 // 主动推送按北京时间解释时间点，避免服务器时区（KST）与用户（中国）不一致导致错位。
 const PROACTIVE_TZ = "Asia/Shanghai";
 
-// 记录每个 (角色:时间点) 的发送状态，进程内去重，避免同分钟重复发送（连发两条）。
-// 取值：
-//   "IN_FLIGHT"     —— 本轮 tick 正在生成文案/发送中（in-flight 锁），下一轮轮询必须跳过，防止慢 LLM/慢网络下竞态连发。
-//   "YYYY-MM-DD HH:MM" —— 该分钟已成功发送（或已决策不打扰/发送失败），本分钟不再处理。
+// ---- 去重存储：进程内 Map + 磁盘文件，双重保险，彻底杜绝「同一数字人连发两条」----
+// 1) 进程内 Map：拦截同一进程内并发 tick 的竞态（慢 LLM/慢网络下多轮 tick 重叠）。
+// 2) 磁盘文件：拦截「进程在某一分钟内重启」后新进程重复发送——内存 Map 重启即丢失，磁盘可跨重启去重。
+// 标记值统一为 marker 字符串 "YYYY-MM-DD HH:MM"（该分钟已处理/已发送/已决策不打扰或失败）。
+// 另用 "IN_FLIGHT" 作为发送中的临时占位（仅存于内存），防止本进程内并发 tick 在标记落盘前重入。
 const sentMarkers = new Map<string, string>();
 const IN_FLIGHT = "IN_FLIGHT";
+const MARKER_FILE = path.join(DATA_DIR, "proactive-sent.json");
+
+// 启动时从磁盘加载历史标记（裁剪 7 天前的，避免文件无限增长）。
+function loadDiskMarkers(): Map<string, string> {
+  try {
+    const raw = fs.readFileSync(MARKER_FILE, "utf8");
+    const obj = JSON.parse(raw) as Record<string, string>;
+    const m = new Map<string, string>();
+    const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+    for (const [k, v] of Object.entries(obj)) {
+      const ts = Date.parse(v.slice(0, 10)); // v 前 10 位为日期 YYYY-MM-DD
+      if (!Number.isNaN(ts) && ts > cutoff) m.set(k, v);
+    }
+    return m;
+  } catch {
+    return new Map();
+  }
+}
+
+const diskMarkers = loadDiskMarkers();
+
+// 原子写：先写临时文件再 rename，避免进程崩溃/并发写导致文件损坏。
+function persistDiskMarkers(): void {
+  try {
+    const obj: Record<string, string> = {};
+    for (const [k, v] of diskMarkers) obj[k] = v;
+    const tmp = `${MARKER_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), "utf8");
+    fs.renameSync(tmp, MARKER_FILE);
+  } catch (err) {
+    console.error("[主动推送] 持久化去重标记失败:", err);
+  }
+}
+
+// 标记某 (角色:分钟) 已处理：同时更新内存与磁盘。落盘在发送之前完成，
+// 因此即便发送过程中进程重启，新进程读到磁盘标记也会跳过——绝不会重发成两条。
+function markSent(key: string, marker: string): void {
+  sentMarkers.set(key, marker);
+  diskMarkers.set(key, marker);
+  persistDiskMarkers();
+}
+
+// 该分钟是否已处理过（内存优先，回退磁盘）。IN_FLIGHT 视为占用，需跳过。
+function alreadyHandled(key: string, marker: string): boolean {
+  const mem = sentMarkers.get(key);
+  if (mem === marker) return true;
+  if (mem === IN_FLIGHT) return true;
+  return diskMarkers.get(key) === marker;
+}
 
 function shanghaiNow(): { hm: string; dayKey: string } {
   const parts = new Intl.DateTimeFormat("zh-CN", {
@@ -138,25 +190,29 @@ async function tick(): Promise<void> {
     if (!timePoints.includes(hm)) continue;
     const markerKey = `${c.id}:${hm}`;
     const marker = `${dayKey} ${hm}`;
-    const existing = sentMarkers.get(markerKey);
-    if (existing === marker) continue;        // 该分钟已成功发送（或已决策不打扰/失败），去重
-    if (existing === IN_FLIGHT) continue;      // 上一轮 tick 正在生成/发送中，跳过，避免竞态连发
 
-    // 进入发送流程前先占位（in-flight 锁）：即使本次 LLM/网络较慢、超过 30s 轮询间隔，
-    // 下一轮 tick 在标记写成最终值前会看到 IN_FLIGHT 而跳过，彻底杜绝连发两条。
+    // 1) 去重（内存 + 磁盘）：本分钟已处理过 → 跳过，绝不再发第二次
+    if (alreadyHandled(markerKey, marker)) {
+      console.log(`[主动推送] 跳过 ${c.name}(${c.id}) @${hm}：本分钟已处理过`);
+      continue;
+    }
+
+    // 2) in-flight 锁：先占位再进入 await，杜绝本进程内慢 LLM/慢网络下并发 tick 竞态连发
     sentMarkers.set(markerKey, IN_FLIGHT);
 
     const decision = await generateProactiveText(c, c.proactive.mode);
     const shouldSend = c.proactive.mode === "always" ? true : decision.send;
     if (!shouldSend || !decision.message.trim()) {
       // 即使不发也标记为本分钟已决策，避免 smart 模式每分钟反复决策
-      sentMarkers.set(markerKey, marker);
+      markSent(markerKey, marker);
       continue;
     }
 
+    // 3) 落盘先于发送：即便发送过程中进程重启，新进程读到磁盘标记也会跳过，彻底防止「重启导致连发两条」
+    markSent(markerKey, marker);
     const ok = await sendProactiveToOwner(c, decision.message.trim());
     if (ok) {
-      sentMarkers.set(markerKey, marker); // 成功：打最终标记，本分钟不再处理
+      console.log(`[主动推送] 已发送 → ${c.name}(${c.id}) @${hm}`);
       // 把主动消息写回会话，使网页/TG 历史一致、并影响后续上下文
       try {
         await appendToSession(`mem-${c.id}`, { role: "assistant", content: decision.message.trim() });
@@ -165,7 +221,7 @@ async function tick(): Promise<void> {
       }
     } else {
       // 发送失败：本分钟不再重试（避免 Telegram 实际已收到却重试造成连发）。下一分钟（新 marker）会重新触发。
-      sentMarkers.set(markerKey, marker);
+      console.warn(`[主动推送] 发送失败（本分钟不再重试） ${c.name}(${c.id}) @${hm}`);
     }
   }
 }
@@ -176,5 +232,7 @@ export function startProactiveScheduler(intervalMs = 30000): void {
   setInterval(() => {
     tick().catch((err) => console.error("主动推送 tick 异常:", err));
   }, intervalMs);
-  console.log(`主动推送调度器已启动（间隔 ${intervalMs}ms，时区 ${PROACTIVE_TZ}）`);
+  console.log(
+    `主动推送调度器已启动（间隔 ${intervalMs}ms，时区 ${PROACTIVE_TZ}，磁盘去重标记 ${diskMarkers.size} 条）`
+  );
 }
