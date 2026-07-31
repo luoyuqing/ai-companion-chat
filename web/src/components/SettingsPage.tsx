@@ -26,7 +26,7 @@ import {
  * - 令牌只保存在内存（不落 localStorage/sessionStorage），刷新页面即需重新输入密码。
  */
 
-type Tab = "humans" | "llm" | "tts" | "photo" | "prompts" | "security" | "service";
+type Tab = "humans" | "ai" | "prompts" | "security" | "service";
 
 const PROMPT_FIELDS: Array<{ key: keyof Omit<PromptSettings, "sceneHints">; label: string; rows?: number }> = [
   { key: "globalSystem", label: "全局系统提示词", rows: 10 },
@@ -427,9 +427,7 @@ export function SettingsPage({
 
         <nav className="settings-tabs">
           <button type="button" className={tab === "humans" ? "active" : ""} onClick={() => setTab("humans")}>数字人管理</button>
-          <button type="button" className={tab === "llm" ? "active" : ""} onClick={() => setTab("llm")}>LLM 模型</button>
-          <button type="button" className={tab === "tts" ? "active" : ""} onClick={() => setTab("tts")}>语音 TTS</button>
-          <button type="button" className={tab === "photo" ? "active" : ""} onClick={() => setTab("photo")}>生图 RunningHub</button>
+          <button type="button" className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI 接口配置</button>
           <button type="button" className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}>提示词</button>
           <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>安全</button>
           <button type="button" className={tab === "service" ? "active" : ""} onClick={() => setTab("service")}>重启服务</button>
@@ -466,8 +464,9 @@ export function SettingsPage({
           <p className="settings-loading">正在加载设置...</p>
         ) : (
           <div className="settings-body">
-            {tab === "llm" ? (
+            {tab === "ai" ? (
               <section className="settings-section">
+                <h3 className="settings-subtitle">LLM 模型</h3>
                 <label className="settings-field">
                   <span>Base URL（OpenAI 兼容）</span>
                   <input value={llmBaseUrl} onChange={(e) => setLlmBaseUrl(e.target.value)} placeholder="https://xxx/v1" />
@@ -511,8 +510,9 @@ export function SettingsPage({
               </section>
             ) : null}
 
-            {tab === "tts" ? (
+            {tab === "ai" ? (
               <section className="settings-section">
+                <h3 className="settings-subtitle">语音 TTS</h3>
                 <label className="settings-field">
                   <span>服务商（固定小米 MiMo，不可修改）</span>
                   <input value={`${settings.tts.provider} · ${settings.tts.baseUrl}`} readOnly disabled />
@@ -531,8 +531,9 @@ export function SettingsPage({
               </section>
             ) : null}
 
-            {tab === "photo" ? (
+            {tab === "ai" ? (
               <section className="settings-section">
+                <h3 className="settings-subtitle">生图 RunningHub</h3>
                 <label className="settings-field">
                   <span>RunningHub API Key（{settings.runningHub?.hasApiKey ? "已配置，留空表示不修改" : "未配置"}）</span>
                   <input

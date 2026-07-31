@@ -19,6 +19,7 @@ import {
   createDigitalHuman,
   deleteDigitalHuman,
   deleteUserMemory,
+  clearSessionHistory,
   getUserMemory,
   resolveMediaUrl,
   saveUserMemory,
@@ -749,8 +750,11 @@ export function DigitalHumanManager({
     if (!c) return;
     setConfirmBusy(true);
     try {
+      // 仅清空与该数字人的聊天记录、会话上下文，以及聊天中产生的长期记忆；
+      // 数字人本身的配置（显示名 / 禁忌 / 偏好 / 人设）在 custom-humans.json，不在此处清除。
+      await clearSessionHistory(`mem-${c.id}`, c.id);
       await deleteUserMemory(c.id);
-      notify?.(`已清除「${c.name}」的记忆`, "success");
+      notify?.(`已清除「${c.name}」的聊天记录与记忆，已重新开始聊天`, "success");
     } catch (error) {
       notify?.(error instanceof Error ? error.message : "清除记忆失败", "error");
     } finally {
@@ -839,7 +843,7 @@ export function DigitalHumanManager({
       <ConfirmDialog
         open={!!pendingClear}
         title="清除记忆"
-        message={`确定清除「${pendingClear?.name}」的全部记忆吗？\n将清空长期记忆（含你配置的显示名/禁忌/偏好等），清空后不可恢复，但数字人本身会保留。`}
+        message={`确定清除「${pendingClear?.name}」的聊天记录与记忆吗？\n将清空与该数字人的全部聊天记录和长期记忆（含 AI 在聊天中记住的内容），相当于重新开始聊天；数字人本身的配置（显示名 / 禁忌 / 偏好 / 人设）会保留。`}
         confirmText="清除记忆"
         danger
         busy={confirmBusy}
