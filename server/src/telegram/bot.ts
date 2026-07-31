@@ -390,6 +390,39 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     }
   }
 
+  // 统一处理「拍照触发词检测 + 拍照等待期拦截」：
+  // 文字消息与语音转写后的文本都走这里，保证两种入口行为一致。
+  // 返回 true 表示已处理（触发生图或处于等待期拦截），上层应 return 不再走普通聊天。
+  async function tryPhotoTrigger(ctx: BotContext, text: string): Promise<boolean> {
+    const sid = chatSessionId(ctx);
+    // 拍照等待期：任何消息（文字/语音）都记为未读，不回复、不重复触发
+    if (photoPending.has(sid)) {
+      await recordUnread(sid, text);
+      return true;
+    }
+    const rhCfg = getRunningHubConfig();
+    const hit = containsTrigger(text, rhCfg.triggerWords);
+    if (hit) {
+      const character = await currentCharacter(ctx);
+      if (!character) {
+        await ctx.reply("请先用 /list 选择一个数字人再聊天。");
+        return true;
+      }
+      console.log(`[RB][${character.name}] 触发生图 触发词=${hit} chatId=${ctx.chat?.id}`);
+      photoPending.add(sid);
+      // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
+      await recordUnread(sid, text);
+      await ctx.reply("📷 好的，那我去拍张照，稍等一下下哦~");
+      // 异步执行，不阻塞；等待期内的用户消息由 photoPending 拦截为「未读」
+      void runPhotoFlow(ctx, character, sid).catch((err) => {
+        console.error("[拍照] 流程异常:", err);
+        photoPending.delete(sid);
+      });
+      return true;
+    }
+    return false;
+  }
+
   // 拍照主流程（异步、不阻塞）：
   // 1) 生成并发送照片；期间用户消息全部记为未读、不回复；
   // 2) 照片发出（或接口报错/超时）后，基于等待期累积的未读上下文，统一回复「一条」消息，
@@ -1057,6 +1090,8 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         return ctx.reply("没听清，能再发一次吗？");
       }
       await ctx.reply(`🎙 识别：${text}`);
+      // 语音转写文本同样走拍照触发词检测（修复：之前语音不会触发生图）
+      if (await tryPhotoTrigger(ctx, text)) return;
       try {
         const result = await runChatWithContext(ctx, text);
         await replyWithTextAndVoice(ctx, result.text, result.character);
@@ -1125,33 +1160,8 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         return ctx.reply(`已更新${field === "name" ? "名字" : field === "description" ? "描述" : "头像"}。`);
       }
 
-      // ---------- 拍照等待期：用户发的任何消息都只记为未读，不回复、不再触发 ----------
-      const sid = chatSessionId(ctx);
-      if (photoPending.has(sid)) {
-        await recordUnread(sid, text);
-        return;
-      }
-
-      // ---------- 触发词检测（可配置多个，至少保留一个）----------
-      const rhCfg = getRunningHubConfig();
-      const hit = containsTrigger(text, rhCfg.triggerWords);
-      if (hit) {
-        const character = await currentCharacter(ctx);
-        if (!character) {
-          return ctx.reply("请先用 /list 选择一个数字人再聊天。");
-        }
-        console.log(`[RB][${character.name}] 触发生图 触发词=${hit} chatId=${ctx.chat?.id}`);
-        photoPending.add(sid);
-        // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
-        await recordUnread(sid, text);
-        await ctx.reply("📷 好的，那我去拍张照，稍等一下下哦~");
-        // 异步执行，不阻塞；等待期内的用户消息由 photoPending 拦截为「未读」
-        void runPhotoFlow(ctx, character, sid).catch((err) => {
-          console.error("[拍照] 流程异常:", err);
-          photoPending.delete(sid);
-        });
-        return;
-      }
+      // ---------- 拍照等待期拦截 + 触发词检测（文字/语音共用，见 tryPhotoTrigger）----------
+      if (await tryPhotoTrigger(ctx, text)) return;
 
       // 普通聊天
       try {
