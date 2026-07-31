@@ -15,7 +15,8 @@ import {
   restartService,
   saveSettings,
   settingsLogin,
-  settingsLogout
+  settingsLogout,
+  settingsInit
 } from "../services/api";
 
 /**
