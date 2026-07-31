@@ -27,6 +27,23 @@ function normalizeMimeType(mimeType?: string) {
   return "mp3";
 }
 
+// 识别接口在部分异常（如内容安全拦截）时会返回 HTTP 200，却把错误信息当成语音文本返回，
+// 例如 "The request was rejected because it was considered high risk"。
+// 这类字符串不是真实语音，若直接送进 LLM 会污染对话历史，必须拦截为识别失败。
+function isLikelyApiErrorOrModeration(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /request was rejected/.test(t) ||
+    /was rejected because/.test(t) ||
+    /considered high risk/.test(t) ||
+    /high risk/.test(t) ||
+    /content.?moderat/i.test(t) ||
+    /rate.?limit/i.test(t) ||
+    /quota exceeded/i.test(t) ||
+    /the request was denied/i.test(t)
+  );
+}
+
 export async function transcribeSpeechAudio(options: {
   audioBase64: string;
   mimeType?: string;
@@ -84,6 +101,9 @@ export async function transcribeSpeechAudio(options: {
   if (!transcript) {
     throw new Error("未识别出语音文本");
   }
+  if (isLikelyApiErrorOrModeration(transcript)) {
+    throw new Error("语音识别被接口安全策略拦截，请换种说法再试");
+  }
 
   return transcript;
 }
@@ -139,6 +159,9 @@ async function transcribeWithMimo(buffer: Buffer, mimeType?: string): Promise<st
   const text = String(data?.choices?.[0]?.message?.content || "").trim();
   if (!text) {
     throw new Error("未识别出语音文本");
+  }
+  if (isLikelyApiErrorOrModeration(text)) {
+    throw new Error("语音识别被接口安全策略拦截，请换种说法再试");
   }
   return text;
 }

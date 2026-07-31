@@ -1105,7 +1105,13 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     } catch (err) {
       console.error("voice handling failed:", err);
       const msg = err instanceof Error ? err.message : String(err);
-      await ctx.reply(`语音处理失败：${msg.slice(0, 120)}`);
+      // 识别类错误给「没听清，请重试」；其它（如对话接口）给通用失败提示。
+      // 绝不把系统/接口报错原文回显给用户，也避免其被当作消息送进 LLM。
+      if (/识别|ASR|语音|MIMO|API_KEY|语音内容/.test(msg)) {
+        await ctx.reply("🎙 没听清，能再发一次吗？");
+      } else {
+        await ctx.reply("语音处理失败，请稍后再试。");
+      }
     } finally {
       if (oggPath) await fs.unlink(oggPath).catch(() => {});
     }
