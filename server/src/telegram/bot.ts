@@ -193,6 +193,42 @@ async function oggToWavBase64(oggPath: string): Promise<{ base64: string; mime: 
   return { base64: buf.toString("base64"), mime: "audio/wav" };
 }
 
+// 判断是否为可重试的网络/限流类错误：
+// - Node 网络层错误（ETIMEDOUT / ECONNRESET / ENOTFOUND / EAI_AGAIN / ECONNREFUSED）
+// - grammy 包裹的 FetchError（message 含 "Network request for ... failed"）
+// - Telegram 限流 429（Too Many Requests）
+function isNetworkError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; message?: string; error?: unknown };
+  if (["ETIMEDOUT", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(e.code ?? "")) {
+    return true;
+  }
+  const msg = typeof e.message === "string" ? e.message : "";
+  if (/Network request for .* failed/i.test(msg)) return true;
+  if (/Too Many Requests/i.test(msg)) return true;
+  if (e.error) return isNetworkError(e.error); // 递归判断嵌套的 FetchError
+  return false;
+}
+
+// 对单条 Telegram 发送做指数退避重试，仅网络/限流类错误才重试，业务错误（如 400/403）直接抛出。
+async function withRetry<T>(label: string, fn: () => Promise<T>, retries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      lastErr = err;
+      if (attempt < retries) {
+        const delay = 500 * Math.pow(2, attempt); // 500ms, 1000ms, 2000ms
+        console.warn(`[TG][${label}] 网络错误，准备第 ${attempt + 2} 次重试：${(err as Error).message?.slice(0, 100) ?? err}`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // 纯 API 版「文本 + 可选语音」发送：供交互聊天（ctx 包裹）与主动推送（无 ctx）共用。
 // voiceEnabled=false 时只发文字，不消耗 TTS 额度（主动推送默认关闭以省额度）。
 async function sendTextWithOptionalVoice(
@@ -202,7 +238,8 @@ async function sendTextWithOptionalVoice(
   character: DigitalHumanConfig,
   voiceEnabled: boolean
 ): Promise<void> {
-  await api.sendMessage(chatId, text.slice(0, 4000));
+  // 主文字：网络抖动时重试，避免已生成的回复因偶发超时被吞掉
+  await withRetry("sendMessage", () => api.sendMessage(chatId, text.slice(0, 4000)), 3);
   if (!voiceEnabled) return;
   try {
     const audioUrl = await synthesizeSpeech(text, character);
@@ -217,11 +254,11 @@ async function sendTextWithOptionalVoice(
     );
     try {
       await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
-      await api.sendVoice(chatId, new InputFile(oggPath));
+      await withRetry("sendVoice", () => api.sendVoice(chatId, new InputFile(oggPath)), 2);
       await fs.unlink(oggPath).catch(() => {});
     } catch (convErr) {
       console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
-      await api.sendAudio(chatId, new InputFile(audioPath));
+      await withRetry("sendAudio", () => api.sendAudio(chatId, new InputFile(audioPath)), 2);
     }
     await fs.unlink(audioPath).catch(() => {});
   } catch (err) {
@@ -1129,7 +1166,11 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
       }
     } catch (err) {
       console.error("text handling failed:", err);
-      await ctx.reply("处理失败，请稍后再试。");
+      if (isNetworkError(err)) {
+        await ctx.reply("⚠️ 网络有点波动，回复没能发出去，请稍后再发一次～");
+      } else {
+        await ctx.reply("处理失败，请稍后再试。");
+      }
     }
   });
 }
