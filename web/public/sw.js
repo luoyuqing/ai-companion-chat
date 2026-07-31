@@ -1,5 +1,5 @@
 const CACHE_VERSION = "v4";
-const CACHE_NAME = `digital-girlfriend-${CACHE_VERSION}`;
+const CACHE_NAME = `ai-companion-chat-${CACHE_VERSION}`;
 const APP_SCOPE = new URL(self.registration.scope);
 
 const STATIC_PATHS = [
@@ -101,7 +101,7 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith("digital-girlfriend-") && key !== CACHE_NAME)
+            .filter((key) => key.startsWith("ai-companion-chat-") && key !== CACHE_NAME)
             .map((key) => caches.delete(key))
         )
       )

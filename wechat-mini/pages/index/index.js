@@ -5,7 +5,7 @@ const STORAGE_KEY_LOCAL_CONTEXT = "dg-mini-local-chat-context-v1";
 const STORAGE_KEY_AVATAR_RENDER_MODE = "dg-mini-avatar-render-mode";
 const STORAGE_KEY_USER_MEMORY = "dg-mini-user-memory-v1";
 const STORAGE_KEY_CHAT_STATES = "dg-mini-chat-states-v1";
-const EXPORT_SCHEMA = "digital-girlfriend-local-archive";
+const EXPORT_SCHEMA = "ai-companion-chat-local-archive";
 const CHAT_STATE_ARCHIVE_PREFIX = "dg-chat-state-v1";
 const MAX_STORED_MESSAGES = 80;
 

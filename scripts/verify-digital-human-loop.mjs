@@ -72,7 +72,7 @@ async function resolveActiveBase() {
 }
 
 function makeTinyGlbBase64() {
-  const json = JSON.stringify({ asset: { version: "2.0", generator: "digital-girlfriend-verify" } });
+  const json = JSON.stringify({ asset: { version: "2.0", generator: "ai-companion-chat-verify" } });
   const paddedJson = json.padEnd(Math.ceil(json.length / 4) * 4, " ");
   const jsonBytes = new TextEncoder().encode(paddedJson);
   const totalLength = 12 + 8 + jsonBytes.length;

@@ -152,7 +152,7 @@ async function synthesizeWithAzure(text: string, character: DigitalHumanConfig):
       "Ocp-Apim-Subscription-Key": apiKey,
       "Content-Type": "application/ssml+xml",
       "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
-      "User-Agent": "digital-girlfriend-platform"
+      "User-Agent": "ai-companion-chat"
     },
     body: `<speak version="1.0" xml:lang="zh-CN"><voice xml:lang="zh-CN" xml:gender="Female" name="${escapeSsml(character.voiceProfile.voice || "zh-CN-XiaoxiaoNeural")}"><prosody rate="-5%" pitch="+2%">${escapeSsml(text)}</prosody></voice></speak>`
   });

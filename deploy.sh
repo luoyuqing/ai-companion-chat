@@ -132,7 +132,7 @@ server {
     listen [::]:80 default_server;
     server_name _;
 
-    auth_basic "digital-girlfriend";
+    auth_basic "ai-companion-chat";
     auth_basic_user_file /etc/nginx/.htpasswd;
 
     root __WWW_DIR__;

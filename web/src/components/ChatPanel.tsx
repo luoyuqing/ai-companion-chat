@@ -57,7 +57,7 @@ const ACTIVE_SCENE_STORAGE_KEY = "dg-active-companion-scene-v1";
 const AUTO_VOICE_STORAGE_KEY = "dg-auto-voice-v1";
 const VOICE_STYLE_STORAGE_KEY = "dg-voice-style-v1";
 const ADULT_VERIFIED_STORAGE_KEY = "dg-adult-verified-v1";
-const EXPORT_SCHEMA = "digital-girlfriend-local-archive";
+const EXPORT_SCHEMA = "ai-companion-chat-local-archive";
 const MAX_STORED_MESSAGES = 80;
 
 type VoiceStyle = "warm" | "soft" | "mature";
@@ -1733,7 +1733,7 @@ export function ChatPanel({
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `digital-girlfriend-archive-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `ai-companion-chat-archive-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
