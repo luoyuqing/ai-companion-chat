@@ -457,8 +457,11 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     try {
       if (photoPath) {
         if (chatId != null) {
-          await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
-          await ctx.api.sendPhoto(chatId, new InputFile(photoPath));
+          // 发送照片：套网络重试，避免生成成功却因到 api.telegram.org 的瞬时抖动而丢图（2026-08-01 09:35 同类问题）
+          await withRetry(`[${character.name}] sendPhoto`, async () => {
+            await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
+            await ctx.api.sendPhoto(chatId, new InputFile(photoPath!));
+          });
         }
       } else {
         const label = outcome === "timeout" ? "拍照超时了" : "拍照失败了";
