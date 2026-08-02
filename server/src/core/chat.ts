@@ -7,6 +7,7 @@ import {
   updateSessionMeta
 } from "../services/session";
 import { getCharacters, resolveCharacter } from "./data";
+import { markUserActivity } from "./activity";
 import {
   buildSceneSystemMessage,
   buildStyleSystemMessage,
@@ -164,6 +165,7 @@ export async function runChat(opts: {
 
   const nextContext = buildSessionContext(existingSession, message, answer.text, opts.relationshipMode);
   await appendToSession(sessionId, { role: "user", content: message }, nextContext);
+  markUserActivity(character.id); // 用户主动发消息 → 标记活跃，抑制主动推送
   const saved = await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
 
   // 总结模式：回合结束后按需重新生成记忆档案（记忆随对话持续压缩更新）

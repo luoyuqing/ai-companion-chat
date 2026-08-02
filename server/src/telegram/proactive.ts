@@ -6,6 +6,7 @@ import { getOpenAiClient, resolveLlmModel } from "../services/llm";
 import { getUserMemory } from "../services/userMemory";
 import type { DigitalHumanConfig, ProactiveConfig } from "../types";
 import { sendProactiveToOwner } from "./bot";
+import { isUserActiveRecently, CHAT_ACTIVE_WINDOW_MS, seedActivity } from "../core/activity";
 
 // 主动推送按北京时间解释时间点，避免服务器时区（KST）与用户（中国）不一致导致错位。
 const PROACTIVE_TZ = "Asia/Shanghai";
@@ -197,6 +198,15 @@ async function tick(): Promise<void> {
       continue;
     }
 
+    // 1.5) 是否正在聊天：用户 30 分钟内发过消息则不主动打扰（smart + always 都生效，代码级硬拦截）。
+    // 不标记、不消费本分钟；用户空闲后同分钟内下次 tick（30s）会顺延补发，当天持续聊天则错过、次日再触发。
+    if (isUserActiveRecently(c.id)) {
+      console.log(
+        `[主动推送] 跳过 ${c.name}(${c.id}) @${hm}：用户正在聊天中（${CHAT_ACTIVE_WINDOW_MS / 60000}min 窗口）`
+      );
+      continue;
+    }
+
     // 2) in-flight 锁：先占位再进入 await，杜绝本进程内慢 LLM/慢网络下并发 tick 竞态连发
     sentMarkers.set(markerKey, IN_FLIGHT);
 
@@ -226,7 +236,26 @@ async function tick(): Promise<void> {
   }
 }
 
+// 启动时用各角色会话的 updatedAt 给「最近活跃」做种子（仅 TG 生效，web 不写 mem-${id} 故覆盖不到）。
+// 作用：进程重启后若用户刚聊完，不会立刻被主动推送打扰。
+async function seedUserActivity(): Promise<void> {
+  try {
+    const chars = await getCharacters();
+    const now = Date.now();
+    for (const c of chars) {
+      const session = await loadSession(`mem-${c.id}`);
+      if (session?.updatedAt && now - session.updatedAt < CHAT_ACTIVE_WINDOW_MS) {
+        seedActivity(c.id, session.updatedAt);
+      }
+    }
+  } catch (err) {
+    console.error("[主动推送] 种子活跃状态失败:", err);
+  }
+}
+
 export function startProactiveScheduler(intervalMs = 30000): void {
+  // 启动时先用会话 updatedAt 给「最近活跃」做种子（仅 TG），避免重启后立即打扰刚聊完的用户
+  seedUserActivity().catch((err) => console.error("[主动推送] 种子活跃状态失败:", err));
   // 启动瞬间先跑一次（捕获正好踩中时间点的边界情况），之后按间隔轮询
   tick().catch((err) => console.error("主动推送 tick 异常:", err));
   setInterval(() => {

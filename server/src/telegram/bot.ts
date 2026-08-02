@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api, RawApi } from "grammy";
 
 import { runChat, generateMemoryForSession } from "../core/chat";
+import { markUserActivity } from "../core/activity";
 import { getRunningHubConfig } from "../core/config";
 import {
   applyCharacterPatch,
@@ -394,6 +395,13 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
   // 文字消息与语音转写后的文本都走这里，保证两种入口行为一致。
   // 返回 true 表示已处理（触发生图或处于等待期拦截），上层应 return 不再走普通聊天。
   async function tryPhotoTrigger(ctx: BotContext, text: string): Promise<boolean> {
+    // 用户主动发消息（任意入口：普通聊天/语音/拍照等待期）都视为「正在聊天」，标记活跃以抑制主动推送
+    try {
+      const c = await currentCharacter(ctx);
+      if (c) markUserActivity(c.id);
+    } catch {
+      /* 打点失败不影响聊天 */
+    }
     const sid = chatSessionId(ctx);
     // 拍照等待期：任何消息（文字/语音）都记为未读，不回复、不重复触发
     if (photoPending.has(sid)) {

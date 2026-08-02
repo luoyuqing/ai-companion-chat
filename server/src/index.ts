@@ -24,6 +24,7 @@ import {
 
 // 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
 import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize } from "./core/chat";
+import { markUserActivity } from "./core/activity";
 import {
   applyCharacterPatch,
   AUDIO_DIR,
@@ -514,6 +515,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     writeSse(res, "meta", { sessionId, characterId: character.id });
     await appendToSession(sessionId, { role: "user", content: message });
+    markUserActivity(character.id); // 用户主动发消息 → 标记活跃，抑制主动推送
 
     let assistantText = "";
     const onChunk = (chunk: StreamChunk) => {
