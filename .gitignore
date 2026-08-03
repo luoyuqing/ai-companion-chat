@@ -13,3 +13,8 @@ server/src/data/settings-auth.json
 server/src/data/sessions/
 server/src/data/user-memories/
 server/src/data/custom-humans.json
+# 内置数字人的用户改写：UI 保存的人设/主动推送/头像/专属 bot token 全在这里。
+# 曾因被 git 跟踪，整体覆盖式部署把线上配置冲成种子版，导致主动推送停摆一整天（2026-08-03）。
+# 服务端 loadHumanOverrides() 对文件缺失有 try/catch 兜底（返回空 overrides），新环境不受影响。
+server/src/data/human-overrides.json
+server/src/data/proactive-sent.json
