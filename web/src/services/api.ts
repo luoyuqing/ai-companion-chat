@@ -81,11 +81,20 @@ export interface DigitalHuman {
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
   voiceProfile: VoiceProfile;
   defaultMood: Emotion;
+  /** 数字人所在地理位置（用于获取她当地的真实时间/天气） */
+  location?: {
+    province: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
   proactive?: {
     enabled: boolean;
     timePoints: string[];
-    mode: "always" | "smart";
+    mode: "always" | "smart" | "probability";
     voiceEnabled?: boolean;
+    probability?: number;
+    timePointProbabilities?: Record<string, number>;
   };
 }
 
@@ -118,11 +127,20 @@ export interface CreateHumanRequest {
   personalityTagline?: string;
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
   telegramBotToken?: string;
+  /** 数字人所在地理位置 */
+  location?: {
+    province: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
   proactive?: {
     enabled: boolean;
     timePoints: string[];
-    mode: "always" | "smart";
+    mode: "always" | "smart" | "probability";
     voiceEnabled?: boolean;
+    probability?: number;
+    timePointProbabilities?: Record<string, number>;
   };
 }
 

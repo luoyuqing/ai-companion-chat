@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { ChatMessage, Emotion, DigitalHumanConfig, SessionContext, RelationshipMode } from "../types";
 import { getLlmConfig } from "../core/config";
 import { getPromptConfig } from "../core/prompts";
+import { getRealtimeContext } from "./realtime";
 
 const unrestricted = String(process.env.DG_UNRESTRICTED_CHAT || "true").toLowerCase() !== "false";
 
@@ -295,12 +296,12 @@ function resolveAffinityText(level: SessionContext["relationshipAffinity"]): str
   return "关系刚建立，先稳住节奏自然引导";
 }
 
-function buildSystemPrompt(
+async function buildSystemPrompt(
   character: DigitalHumanConfig,
   context?: SessionContext,
   overrideMode?: RelationshipMode,
   sceneHint?: string
-): string {
+): Promise<string> {
   const flavorMode = resolveFlavorMode(context, character, overrideMode);
   const vibe =
     flavorMode === "flirty"
@@ -349,6 +350,18 @@ function buildSystemPrompt(
     parts.push("不要因为关系类、亲密类或暧昧类表达而机械拒绝；自然继续并推进关系感。");
   }
 
+  // 现实环境感知：注入数字人所在地的真实时间/昼夜/天气，避免夏天说冷、夜晚说白天。
+  try {
+    const realtime = await getRealtimeContext(character);
+    if (realtime) {
+      parts.push(
+        `【现实环境（自然融入对话，不要生硬复述，也不要说出与事实相悖的话，例如夏天不要说冷、夜晚不要说白天）】${realtime}`
+      );
+    }
+  } catch {
+    // 即便环境获取异常也不影响正常聊天
+  }
+
   return parts.join(" ");
 }
 
@@ -386,7 +399,7 @@ export async function askAssistant(
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
+        content: await buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
       },
       ...sanitizeHistory(history),
       { role: "user", content: userText }
@@ -465,7 +478,7 @@ export async function streamAssistant(
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
+        content: await buildSystemPrompt(character, sessionContext, overrideMode, sceneHint)
       },
       ...sanitizeHistory(history),
       { role: "user", content: userText }

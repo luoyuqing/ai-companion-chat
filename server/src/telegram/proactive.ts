@@ -7,6 +7,7 @@ import { getUserMemory } from "../services/userMemory";
 import type { DigitalHumanConfig, ProactiveConfig } from "../types";
 import { sendProactiveToOwner } from "./bot";
 import { isUserActiveRecently, CHAT_ACTIVE_WINDOW_MS, seedActivity } from "../core/activity";
+import { getRealtimeContext } from "../services/realtime";
 
 // 主动推送按北京时间解释时间点，避免服务器时区（KST）与用户（中国）不一致导致错位。
 const PROACTIVE_TZ = "Asia/Shanghai";
@@ -123,11 +124,21 @@ async function generateProactiveText(
   ].filter(Boolean).join("\n");
   const time = shanghaiNow().hm;
 
+  // 现实环境：让主动消息也能随真实时间/季节/天气变化
+  let realtimeHint = "";
+  try {
+    const realtime = await getRealtimeContext(character);
+    if (realtime) realtimeHint = `现实环境：${realtime}。\n`;
+  } catch {
+    realtimeHint = "";
+  }
+
   const systemPrompt =
     `你是${character.name}。\n` +
     `你的人设：${character.description}\n` +
     `人设口令：${character.personalityTagline || "（无）"}\n` +
     `你们的关系风格：${character.relationshipMode || "sweet"}\n` +
+    realtimeHint +
     `你们的关系与过往记忆：${memoryFile}\n` +
     `用户（主人）资料与偏好：${userMemoryText || "（暂无）"}\n` +
     `聊天禁忌（绝不能触碰，发消息时务必回避）：${taboos}\n\n` +
@@ -174,6 +185,13 @@ async function generateProactiveText(
   }
 }
 
+function resolveProbability(cfg: ProactiveConfig, hm: string): number {
+  const pointProb = cfg.timePointProbabilities?.[hm];
+  if (typeof pointProb === "number" && pointProb > 0) return Math.min(100, pointProb);
+  if (typeof cfg.probability === "number" && cfg.probability > 0) return Math.min(100, cfg.probability);
+  return 100;
+}
+
 async function tick(): Promise<void> {
   const { hm, dayKey } = shanghaiNow();
   let characters: DigitalHumanConfig[] = [];
@@ -207,11 +225,27 @@ async function tick(): Promise<void> {
       continue;
     }
 
+    // 1.6) 按概率发送：probability 模式下，本分钟按概率掷骰决定是否发送。
+    // 掷不中则标记为本分钟已决策（不发送），避免每分钟反复掷；与去重逻辑天然兼容。
+    if (c.proactive.mode === "probability") {
+      const prob = resolveProbability(c.proactive, hm);
+      const roll = Math.random() * 100;
+      if (roll >= prob) {
+        markSent(markerKey, marker); // 本分钟已决策（不发送）
+        console.log(
+          `[主动推送] 概率未命中，跳过 ${c.name}(${c.id}) @${hm}：概率=${prob}%，roll=${roll.toFixed(1)}`
+        );
+        continue;
+      }
+      console.log(`[主动推送] 概率命中 ${c.name}(${c.id}) @${hm}：概率=${prob}%，roll=${roll.toFixed(1)}`);
+    }
+
     // 2) in-flight 锁：先占位再进入 await，杜绝本进程内慢 LLM/慢网络下并发 tick 竞态连发
     sentMarkers.set(markerKey, IN_FLIGHT);
 
-    const decision = await generateProactiveText(c, c.proactive.mode);
-    const shouldSend = c.proactive.mode === "always" ? true : decision.send;
+    const decision = await generateProactiveText(c, c.proactive.mode === "probability" ? "always" : c.proactive.mode);
+    const shouldSend =
+      c.proactive.mode === "always" || c.proactive.mode === "probability" ? true : decision.send;
     if (!shouldSend || !decision.message.trim()) {
       // 即使不发也标记为本分钟已决策，避免 smart 模式每分钟反复决策
       markSent(markerKey, marker);

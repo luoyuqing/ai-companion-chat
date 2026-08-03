@@ -27,6 +27,9 @@ import {
   uploadAvatarFile
 } from "../services/api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import chinaCities from "../data/china-cities.json";
+
+type CityLocation = { province: string; city: string; latitude: number; longitude: number };
 
 // ============ 常量（从 ChatPanel 迁移） ============
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
@@ -94,11 +97,14 @@ interface NewCharacterForm {
   personalityTagline: string;
   relationshipMode: (typeof relationshipModes)[number];
   telegramBotToken: string;
+  location: CityLocation | null;
   proactive: {
     enabled: boolean;
     timePoints: string[];
-    mode: "always" | "smart";
+    mode: "always" | "smart" | "probability";
     voiceEnabled?: boolean;
+    probability?: number;
+    timePointProbabilities?: Record<string, number>;
   };
 }
 
@@ -121,6 +127,7 @@ function defaultForm(): NewCharacterForm {
     personalityTagline: "",
     relationshipMode: "sweet",
     telegramBotToken: "",
+    location: null,
     proactive: { enabled: false, timePoints: [], mode: "always", voiceEnabled: false }
   };
 }
@@ -148,12 +155,17 @@ function fromCharacter(c: DigitalHuman): NewCharacterForm {
       ? (c.relationshipMode as (typeof relationshipModes)[number])
       : "sweet",
     telegramBotToken: "",
+    location: c.location
+      ? { province: c.location.province, city: c.location.city, latitude: c.location.latitude, longitude: c.location.longitude }
+      : null,
     proactive: c.proactive
       ? {
           enabled: Boolean(c.proactive.enabled),
           timePoints: Array.isArray(c.proactive.timePoints) ? c.proactive.timePoints.slice(0, 3) : [],
-          mode: c.proactive.mode === "smart" ? "smart" : "always",
-          voiceEnabled: Boolean(c.proactive.voiceEnabled)
+          mode: c.proactive.mode === "smart" ? "smart" : c.proactive.mode === "probability" ? "probability" : "always",
+          voiceEnabled: Boolean(c.proactive.voiceEnabled),
+          probability: typeof c.proactive.probability === "number" ? c.proactive.probability : undefined,
+          timePointProbabilities: c.proactive.timePointProbabilities ? { ...c.proactive.timePointProbabilities } : undefined
         }
       : { enabled: false, timePoints: [], mode: "always", voiceEnabled: false }
   };
@@ -213,11 +225,31 @@ function buildPayload(form: NewCharacterForm): CreateHumanRequest {
     personalityTagline: form.personalityTagline.trim(),
     relationshipMode: form.relationshipMode,
     telegramBotToken: form.telegramBotToken.trim() || undefined,
+    ...(form.location
+      ? {
+          location: {
+            province: form.location.province,
+            city: form.location.city,
+            latitude: form.location.latitude,
+            longitude: form.location.longitude
+          }
+        }
+      : {}),
     proactive: {
       enabled: form.proactive.enabled,
       timePoints: form.proactive.timePoints.filter((t) => !!t).slice(0, 3),
       mode: form.proactive.mode,
-      voiceEnabled: form.proactive.voiceEnabled
+      voiceEnabled: form.proactive.voiceEnabled,
+      ...(typeof form.proactive.probability === "number" ? { probability: form.proactive.probability } : {}),
+      ...(form.proactive.timePointProbabilities && Object.keys(form.proactive.timePointProbabilities).length
+        ? {
+            timePointProbabilities: Object.fromEntries(
+              Object.entries(form.proactive.timePointProbabilities).filter(([k]) =>
+                form.proactive.timePoints.includes(k)
+              )
+            )
+          }
+        : {})
     },
     ...(emotionProfile ? { emotionProfile } : {}),
     ...(avatarVideoProfile ? { avatarVideoProfile } : {})
@@ -518,6 +550,58 @@ function CharacterForm({
         </label>
 
         <label className="field">
+          <span className="field-label">所在城市（用于感知真实时间 / 天气）</span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select
+              value={form.location?.province || ""}
+              onChange={(e) => {
+                const province = e.target.value;
+                const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[province] || [];
+                const first = cities[0];
+                setForm((p) => ({
+                  ...p,
+                  location: first ? { province, city: first.name, latitude: first.lat, longitude: first.lon } : null
+                }));
+              }}
+            >
+              <option value="">选择省份</option>
+              {(Object.keys(chinaCities) as string[]).map((prov) => (
+                <option key={prov} value={prov}>{prov}</option>
+              ))}
+            </select>
+            <select
+              value={form.location?.city || ""}
+              disabled={!form.location?.province}
+              onChange={(e) => {
+                const cityName = e.target.value;
+                const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location?.province || ""] || [];
+                const city = cities.find((c) => c.name === cityName);
+                if (city && form.location) {
+                  setForm((p) => ({
+                    ...p,
+                    location: { province: form.location!.province, city: city.name, latitude: city.lat, longitude: city.lon }
+                  }));
+                }
+              }}
+            >
+              <option value="">选择城市</option>
+              {form.location?.province
+                ? ((chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location.province] || []).map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))
+                : null}
+            </select>
+          </div>
+          {form.location ? (
+            <small className="field-hint">
+              已设为 {form.location.province} · {form.location.city}（{form.location.latitude.toFixed(2)}, {form.location.longitude.toFixed(2)}），数字人将感知她当地的真实时间与天气。
+            </small>
+          ) : (
+            <small className="field-hint">设置后，聊天和主动推送会带上她所在地的真实时间/天气/气温。</small>
+          )}
+        </label>
+
+        <label className="field">
           <span className="field-label">主动推送（专属 bot 主动给主人发消息）</span>
           <label className="inline-check">
             <input
@@ -571,12 +655,53 @@ function CharacterForm({
               <span className="field-label">发送模式</span>
               <select
                 value={form.proactive.mode}
-                onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, mode: e.target.value as "always" | "smart" } }))}
+                onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, mode: e.target.value as "always" | "smart" | "probability" } }))}
               >
                 <option value="always">到点必发</option>
                 <option value="smart">智能判断（按人设/关系/上下文决定是否发）</option>
+                <option value="probability">按概率发送（掷骰决定是否发）</option>
               </select>
             </label>
+
+            {form.proactive.mode === "probability" ? (
+              <>
+                <label className="field">
+                  <span className="field-label">全局发送概率（1–100，按百分比）</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={form.proactive.probability ?? 100}
+                    onChange={(e) => {
+                      const v = Math.min(100, Math.max(1, Number(e.target.value) || 1));
+                      setForm((p) => ({ ...p, proactive: { ...p.proactive, probability: v } }));
+                    }}
+                  />
+                  <small className="field-hint">到点时按此概率决定是否推送；不填视为必发（100%）。</small>
+                </label>
+                <label className="field">
+                  <span className="field-label">各时间点单独概率（可选，覆盖全局）</span>
+                  {form.proactive.timePoints.map((tp) => (
+                    <div key={tp} className="timepoint-row">
+                      <span style={{ minWidth: 48 }}>{tp}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={form.proactive.timePointProbabilities?.[tp] ?? form.proactive.probability ?? 100}
+                        onChange={(e) => {
+                          const v = Math.min(100, Math.max(1, Number(e.target.value) || 1));
+                          const tpp = { ...(form.proactive.timePointProbabilities || {}) };
+                          tpp[tp] = v;
+                          setForm((p) => ({ ...p, proactive: { ...p.proactive, timePointProbabilities: tpp } }));
+                        }}
+                      />
+                      <span>%</span>
+                    </div>
+                  ))}
+                </label>
+              </>
+            ) : null}
 
             <label className="inline-check">
               <input

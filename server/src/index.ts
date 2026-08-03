@@ -15,6 +15,7 @@ import {
   ChatRequestBody,
   ChatMessage,
   ChatResponse,
+  CharacterLocation,
   RelationshipMode,
   DigitalHumanConfig,
   EmotionProfile,
@@ -62,16 +63,46 @@ import { getPromptConfig } from "./core/prompts";
 import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
 
 // 规范化主动推送配置：限制最多 3 个时间点，模式只能是 always/smart。
+// 规范化主动推送配置：限制最多 3 个时间点，模式支持 always/smart/probability；
+// probability 模式下抽取全局概率与各时间点概率覆盖（1-100）。
 function normalizeProactive(input: unknown): ProactiveConfig | undefined {
   if (!input || typeof input !== "object") return undefined;
   const p = input as Record<string, unknown>;
   const timePoints = Array.isArray(p.timePoints)
     ? (p.timePoints as unknown[]).filter((t) => typeof t === "string").slice(0, 3).map(String)
     : [];
+  const mode: ProactiveConfig["mode"] =
+    p.mode === "smart" ? "smart" : p.mode === "probability" ? "probability" : "always";
+  const result: ProactiveConfig = { enabled: Boolean(p.enabled), timePoints, mode };
+
+  if (typeof p.probability === "number" && p.probability > 0) {
+    result.probability = Math.min(100, Math.max(1, Math.round(p.probability)));
+  }
+  if (p.timePointProbabilities && typeof p.timePointProbabilities === "object") {
+    const tpp: Record<string, number> = {};
+    for (const [k, v] of Object.entries(p.timePointProbabilities as Record<string, unknown>)) {
+      const num = Number(v);
+      if (typeof k === "string" && /^\d{1,2}:\d{2}$/.test(k) && Number.isFinite(num) && num > 0) {
+        tpp[k] = Math.min(100, Math.max(1, Math.round(num)));
+      }
+    }
+    if (Object.keys(tpp).length) result.timePointProbabilities = tpp;
+  }
+  return result;
+}
+
+// 规范化数字人地理位置：province/city 非空且经纬度为合法数字才接受。
+function normalizeLocation(input: unknown): CharacterLocation | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const l = input as Record<string, unknown>;
+  const lat = Number(l.latitude);
+  const lon = Number(l.longitude);
+  if (!l.province || !l.city || !Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
   return {
-    enabled: Boolean(p.enabled),
-    timePoints,
-    mode: p.mode === "smart" ? "smart" : "always"
+    province: String(l.province).trim(),
+    city: String(l.city).trim(),
+    latitude: lat,
+    longitude: lon
   };
 }
 
@@ -251,7 +282,8 @@ app.post("/api/digital-humans", async (req, res) => {
       relationshipMode,
       telegramBotToken,
       chatTaboos,
-      proactive
+      proactive,
+      location
     } = req.body as {
       name?: string;
       description?: string;
@@ -271,6 +303,7 @@ app.post("/api/digital-humans", async (req, res) => {
       personalityTagline?: string;
       relationshipMode?: DigitalHumanConfig["relationshipMode"];
       telegramBotToken?: string;
+      location?: unknown;
     };
 
     if (!name || !description || !avatarUrl || !voice) {
@@ -303,7 +336,8 @@ app.post("/api/digital-humans", async (req, res) => {
       defaultMood: ensureSupportedMood(defaultMood),
       telegramBotToken: telegramBotToken?.trim() || undefined,
       chatTaboos: chatTaboos?.trim() || undefined,
-      proactive: normalizeProactive(proactive)
+      proactive: normalizeProactive(proactive),
+      location: normalizeLocation(location)
     };
     customs.push(created);
     await writeCustomHumans(customs);
@@ -343,6 +377,11 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
       patch.proactive = normalizeProactive(body.proactive);
     }
     if (body.avatarType !== undefined) patch.avatarType = normalizeAvatarType(body.avatarType);
+    // location：配置了合法地理位置才更新；传空对象/非法则不修改，避免写入脏数据
+    if (body.location && typeof body.location === "object") {
+      const loc = normalizeLocation(body.location);
+      if (loc) patch.location = loc;
+    }
 
     const voice = typeof body.voice === "string" ? body.voice.trim() : "";
     const voiceProvider = body.voiceProvider;

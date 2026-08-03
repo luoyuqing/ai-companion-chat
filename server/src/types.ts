@@ -25,6 +25,18 @@ export interface SessionContext {
   updatedAt: string;
 }
 
+/** 数字人所在地理位置（用于获取她当地的真实时间与天气）。 */
+export interface CharacterLocation {
+  /** 省份，如 "广东省" */
+  province: string;
+  /** 城市，如 "深圳" */
+  city: string;
+  /** 纬度（小数度） */
+  latitude: number;
+  /** 经度（小数度） */
+  longitude: number;
+}
+
 export interface DigitalHumanConfig {
   id: string;
   name: string;
@@ -36,6 +48,8 @@ export interface DigitalHumanConfig {
   avatarVideoProfile?: EmotionProfile;
   personalityTagline?: string;
   relationshipMode?: RelationshipMode;
+  /** 数字人所在地理位置（设置后聊天会注入她当地的真实时间/天气）。 */
+  location?: CharacterLocation;
   voiceProfile: {
     provider: "openai" | "azure" | "local" | "mimo";
     voice: string;
@@ -55,8 +69,8 @@ export interface DigitalHumanConfig {
   proactive?: ProactiveConfig;
 }
 
-// 主动推送模式：always=到点必发；smart=根据人设/关系/上下文由模型判断是否发。
-export type ProactiveMode = "always" | "smart";
+// 主动推送模式：always=到点必发；smart=根据人设/关系/上下文由模型判断是否发；probability=按概率掷骰决定本分钟是否发。
+export type ProactiveMode = "always" | "smart" | "probability";
 
 export interface ProactiveConfig {
   enabled: boolean;
@@ -65,6 +79,10 @@ export interface ProactiveConfig {
   mode: ProactiveMode;
   // 主动推送是否附带语音（复用 MiMo TTS）。默认关闭，避免每条定时消息都消耗语音额度。
   voiceEnabled?: boolean;
+  // probability 模式下全局默认概率（1-100，按百分比），不填则视为 100（必发）。
+  probability?: number;
+  // 各时间点单独概率覆盖，key 为 "HH:MM"，值 1-100。优先级高于 probability。
+  timePointProbabilities?: Record<string, number>;
 }
 
 export interface ChatRequestBody {
