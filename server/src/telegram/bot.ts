@@ -473,7 +473,10 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         }
       } else {
         const label = outcome === "timeout" ? "拍照超时了" : "拍照失败了";
-        await ctx.reply(`📷 ${label}${errMsg ? "：" + errMsg.slice(0, 120) : ""}`);
+        // 失败提示也套网络重试，避免 Telegram 瞬时超时把错误通知吞掉（2026-08-03 22:36 夏知微静默丢图）
+        await withRetry(`[${character.name}] 拍照失败提示`, () =>
+          ctx.reply(`📷 ${label}${errMsg ? "：" + errMsg.slice(0, 120) : ""}`)
+        );
       }
 
       // 照片发出（或失败后）：基于等待期累积的未读消息，统一回复「一条」

@@ -80,16 +80,36 @@ async function rhSubmit(apiKey: string, fileName: string, prompt: string): Promi
     instanceType: "default",
     usePersonalQueue: "false"
   };
-  const resp = await fetch(`${RH_BASE}/run/ai-app/${APP_ID}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body)
-  });
-  const json = (await resp.json().catch(() => ({}))) as { taskId?: string; errorCode?: string; errorMessage?: string };
-  if (resp.status !== 200 || !json?.taskId) {
-    throw new Error(`RunningHub 提交失败：${json?.errorMessage || json?.errorCode || JSON.stringify(json).slice(0, 160)}`);
+  const MAX_ATTEMPTS = 4;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const resp = await fetch(`${RH_BASE}/run/ai-app/${APP_ID}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body)
+      });
+      const json = (await resp.json().catch(() => ({}))) as { taskId?: string; errorCode?: string; errorMessage?: string };
+      if (resp.status === 200 && json?.taskId) return json.taskId;
+      const msg = json?.errorMessage || json?.errorCode || JSON.stringify(json).slice(0, 160);
+      lastErr = new Error(`RunningHub 提交失败：${msg}`);
+      // 仅并发/限流类错误才退避重试（名额约 1-2 分钟释放）
+      const isLimit = resp.status === 429 || /queue limit|too many requests|rate limit|并发/i.test(msg);
+      if (!isLimit || attempt === MAX_ATTEMPTS) throw lastErr;
+      const wait = Math.min(8000, 1000 * attempt * 2);
+      console.warn(`[RB] 提交被限流，${wait}ms 后重试(${attempt}/${MAX_ATTEMPTS})：${msg}`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    } catch (e) {
+      lastErr = e;
+      const isLimit = e instanceof Error && /queue limit|too many requests|rate limit|并发/i.test(e.message);
+      if (!isLimit || attempt === MAX_ATTEMPTS) throw e;
+      const wait = Math.min(8000, 1000 * attempt * 2);
+      console.warn(`[RB] 提交异常，${wait}ms 后重试(${attempt}/${MAX_ATTEMPTS})：${(e as Error).message}`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
-  return json.taskId;
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 async function rhQuery(apiKey: string, taskId: string): Promise<{
