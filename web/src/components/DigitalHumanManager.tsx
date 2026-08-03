@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
 import {
   Brain,
   Image as ImageIcon,
@@ -257,6 +257,86 @@ function buildPayload(form: NewCharacterForm): CreateHumanRequest {
   return payload;
 }
 
+// ============ 表单辅助组件：可折叠分区 + 概率滑块 ============
+function useIsMobile(): boolean {
+  const [m, setM] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 720px)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 720px)");
+    const handler = () => setM(mq.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return m;
+}
+
+function FormSection({
+  title,
+  desc,
+  defaultOpen = true,
+  children
+}: {
+  title: string;
+  desc?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="dh-section">
+      <button
+        type="button"
+        className="dh-section-head"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className="dh-section-title">{title}</span>
+        {desc ? <span className="dh-section-desc">{desc}</span> : null}
+        <span className={`dh-section-toggle${open ? " open" : ""}`}>▾</span>
+      </button>
+      {open ? <div className="dh-section-body">{children}</div> : null}
+    </section>
+  );
+}
+
+function ProbabilitySlider({
+  value,
+  onChange
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const presets = [20, 40, 60, 80, 100];
+  return (
+    <div className="prob-field">
+      <div className="prob-row">
+        <input
+          type="range"
+          className="prob-slider"
+          min={1}
+          max={100}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+        <span className="prob-value">{value}%</span>
+      </div>
+      <div className="prob-presets">
+        {presets.map((p) => (
+          <button
+            type="button"
+            key={p}
+            className={`prob-chip${value === p ? " active" : ""}`}
+            onClick={() => onChange(p)}
+          >
+            {p}%
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ============ 新增 / 编辑 表单（全屏式，非弹框） ============
 function CharacterForm({
   mode,
@@ -276,6 +356,7 @@ function CharacterForm({
   const [submitting, setSubmitting] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [memory, setMemory] = useState<UserMemory>(() => ({ ...EMPTY_MEMORY }));
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     let cancelled = false;
@@ -397,328 +478,328 @@ function CharacterForm({
       </div>
 
       <form onSubmit={submit} className="creator creator-v2">
-        <label className="field">
-          <span className="field-label">名字</span>
-          <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="例如：小冰" />
-        </label>
+        <FormSection title="基础信息" desc="名字、人设与头像">
+          <label className="field">
+            <span className="field-label">名字</span>
+            <input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder="例如：小冰" />
+          </label>
 
-        <label className="field">
-          <span className="field-label">人设描述</span>
-          <input
-            value={form.description}
-            onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-            placeholder="她的性格、身份、说话风格，例如：温柔懂事的女大学生"
-          />
-        </label>
-
-        <div className="field">
-          <span className="field-label">头像（静态图片）</span>
-          <label className="file-picker">
-            {avatarUploading ? "上传中..." : "上传头像图片（png/jpg/webp/gif/svg，≤8MB）"}
+          <label className="field dh-span-full">
+            <span className="field-label">人设描述</span>
             <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-              disabled={avatarUploading}
-              onChange={(e) => handleAvatarFile(e.currentTarget.files)}
+              value={form.description}
+              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+              placeholder="她的性格、身份、说话风格，例如：温柔懂事的女大学生"
             />
           </label>
-          <input
-            value={form.avatarUrl}
-            onChange={(e) => setForm((p) => ({ ...p, avatarUrl: e.target.value }))}
-            placeholder="也可直接粘贴图片 URL"
-          />
-          {form.avatarUrl ? (
-            <img
-              src={resolveMediaUrl(form.avatarUrl)}
-              alt="头像预览"
-              style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
+
+          <div className="field dh-span-full">
+            <span className="field-label">头像（静态图片）</span>
+            <label className="file-picker">
+              {avatarUploading ? "上传中..." : "上传头像图片（png/jpg/webp/gif/svg，≤8MB）"}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                disabled={avatarUploading}
+                onChange={(e) => handleAvatarFile(e.currentTarget.files)}
+              />
+            </label>
+            <input
+              value={form.avatarUrl}
+              onChange={(e) => setForm((p) => ({ ...p, avatarUrl: e.target.value }))}
+              placeholder="也可直接粘贴图片 URL"
             />
-          ) : null}
-        </div>
+            {form.avatarUrl ? (
+              <img
+                src={resolveMediaUrl(form.avatarUrl)}
+                alt="头像预览"
+                style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
+              />
+            ) : null}
+          </div>
 
-        <label className="field">
-          <span className="field-label">音频模型</span>
-          <select value={form.audioModel} onChange={(e) => setForm((p) => ({ ...p, audioModel: e.target.value as MimoAudioModel }))}>
-            {MIMO_AUDIO_MODELS.map((o) => (
-              <option key={o.id} value={o.id}>{o.label}</option>
-            ))}
-          </select>
-          <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === form.audioModel)?.desc}</small>
-        </label>
-
-        {form.audioModel === "mimo-v2.5-tts" && (
           <label className="field">
-            <span className="field-label">预制音色（必选）</span>
-            <select
-              value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voiceId) ? form.voiceId : ""}
-              onChange={(e) => setForm((p) => ({ ...p, voiceId: e.target.value || "冰糖" }))}
-            >
-              {MIMO_VOICE_OPTIONS.map((o) => (
+            <span className="field-label">头像模式</span>
+            <select value={form.avatarType} onChange={(e) => setForm((p) => ({ ...p, avatarType: e.target.value === "video" ? "video" : "image" }))}>
+              <option value="image">静态头像</option>
+              <option value="video">动态视频（需额外提供情绪视频资源）</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span className="field-label">人设口令（可选）</span>
+            <input
+              value={form.personalityTagline}
+              onChange={(e) => setForm((p) => ({ ...p, personalityTagline: e.target.value }))}
+              placeholder="例如：轻松撒娇，但不越界"
+            />
+          </label>
+        </FormSection>
+
+        <FormSection title="声音设置" desc="TTS 模型与音色">
+          <label className="field">
+            <span className="field-label">音频模型</span>
+            <select value={form.audioModel} onChange={(e) => setForm((p) => ({ ...p, audioModel: e.target.value as MimoAudioModel }))}>
+              {MIMO_AUDIO_MODELS.map((o) => (
                 <option key={o.id} value={o.id}>{o.label}</option>
               ))}
             </select>
+            <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === form.audioModel)?.desc}</small>
           </label>
-        )}
 
-        {form.audioModel === "mimo-v2.5-tts" && (
-          <label className="field">
-            <span className="field-label">风格描述（可选）</span>
-            <input
-              value={form.stylePrompt}
-              onChange={(e) => setForm((p) => ({ ...p, stylePrompt: e.target.value }))}
-              placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
-            />
-            <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
-          </label>
-        )}
-
-        {form.audioModel === "mimo-v2.5-tts-voicedesign" && (
-          <label className="field">
-            <span className="field-label">音色描述（必填）</span>
-            <input
-              value={form.voiceDesignPrompt}
-              onChange={(e) => setForm((p) => ({ ...p, voiceDesignPrompt: e.target.value }))}
-              placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
-            />
-            <small>这段文字会作为音色设计描述传给模型。</small>
-          </label>
-        )}
-
-        {form.audioModel === "mimo-v2.5-tts-voiceclone" && (
-          <label className="field">
-            <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
-            <label className="file-picker">
-              选择音频样本
-              <input type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav" onChange={(e) => handleVoiceCloneFile(e.currentTarget.files)} />
-            </label>
-            {form.voiceCloneSample ? (
-              <small className="field-hint">已上传样本（{(form.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
-            ) : null}
-          </label>
-        )}
-
-        <label className="field">
-          <span className="field-label">默认情绪</span>
-          <select
-            value={form.defaultMood}
-            onChange={(e) => setForm((p) => ({ ...p, defaultMood: e.target.value as (typeof moods)[number] }))}
-          >
-            {moods.map((mood) => (
-              <option key={mood} value={mood}>{moodLabelMap[mood]}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field-label">关系模式</span>
-          <select
-            value={form.relationshipMode}
-            onChange={(e) => setForm((p) => ({ ...p, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))}
-          >
-            {relationshipModes.map((mode) => (
-              <option key={mode} value={mode}>{relationshipModeLabelMap[mode]}</option>
-            ))}
-          </select>
-          <small className="field-hint">决定她和你互动的整体语气。</small>
-        </label>
-
-        <label className="field">
-          <span className="field-label">头像模式</span>
-          <select value={form.avatarType} onChange={(e) => setForm((p) => ({ ...p, avatarType: e.target.value === "video" ? "video" : "image" }))}>
-            <option value="image">静态头像</option>
-            <option value="video">动态视频（需额外提供情绪视频资源）</option>
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field-label">人设口令（可选）</span>
-          <input
-            value={form.personalityTagline}
-            onChange={(e) => setForm((p) => ({ ...p, personalityTagline: e.target.value }))}
-            placeholder="例如：轻松撒娇，但不越界"
-          />
-        </label>
-
-        <label className="field">
-          <span className="field-label">Telegram 专属 Bot Token（可选）</span>
-          <input
-            value={form.telegramBotToken}
-            onChange={(e) => setForm((p) => ({ ...p, telegramBotToken: e.target.value }))}
-            placeholder="配置后该数字人以独立 bot 运行；留空=不修改（编辑时清空保存=关闭）"
-          />
-          <small>配置了专属 bot 才能开启主动推送。</small>
-        </label>
-
-        <label className="field">
-          <span className="field-label">所在城市（用于感知真实时间 / 天气）</span>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select
-              value={form.location?.province || ""}
-              onChange={(e) => {
-                const province = e.target.value;
-                const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[province] || [];
-                const first = cities[0];
-                setForm((p) => ({
-                  ...p,
-                  location: first ? { province, city: first.name, latitude: first.lat, longitude: first.lon } : null
-                }));
-              }}
-            >
-              <option value="">选择省份</option>
-              {(Object.keys(chinaCities) as string[]).map((prov) => (
-                <option key={prov} value={prov}>{prov}</option>
-              ))}
-            </select>
-            <select
-              value={form.location?.city || ""}
-              disabled={!form.location?.province}
-              onChange={(e) => {
-                const cityName = e.target.value;
-                const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location?.province || ""] || [];
-                const city = cities.find((c) => c.name === cityName);
-                if (city && form.location) {
-                  setForm((p) => ({
-                    ...p,
-                    location: { province: form.location!.province, city: city.name, latitude: city.lat, longitude: city.lon }
-                  }));
-                }
-              }}
-            >
-              <option value="">选择城市</option>
-              {form.location?.province
-                ? ((chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location.province] || []).map((c) => (
-                    <option key={c.name} value={c.name}>{c.name}</option>
-                  ))
-                : null}
-            </select>
-          </div>
-          {form.location ? (
-            <small className="field-hint">
-              已设为 {form.location.province} · {form.location.city}（{form.location.latitude.toFixed(2)}, {form.location.longitude.toFixed(2)}），数字人将感知她当地的真实时间与天气。
-            </small>
-          ) : (
-            <small className="field-hint">设置后，聊天和主动推送会带上她所在地的真实时间/天气/气温。</small>
-          )}
-        </label>
-
-        <label className="field">
-          <span className="field-label">主动推送（专属 bot 主动给主人发消息）</span>
-          <label className="inline-check">
-            <input
-              type="checkbox"
-              checked={form.proactive.enabled}
-              onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, enabled: e.target.checked } }))}
-            />
-            启用主动推送
-          </label>
-        </label>
-
-        {form.proactive.enabled ? (
-          <>
+          {form.audioModel === "mimo-v2.5-tts" && (
             <label className="field">
-              <span className="field-label">发送时间点（最多 3 个，按北京时间）</span>
-              {form.proactive.timePoints.map((tp, i) => (
-                <div key={i} className="timepoint-row">
-                  <input
-                    type="time"
-                    value={tp}
-                    onChange={(e) => {
-                      const v = [...form.proactive.timePoints];
-                      v[i] = e.target.value;
-                      setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: v } }));
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const v = form.proactive.timePoints.filter((_, j) => j !== i);
-                      setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: v } }));
-                    }}
-                  >
-                    删除
-                  </button>
-                </div>
-              ))}
-              {form.proactive.timePoints.length < 3 ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: [...p.proactive.timePoints, "20:00"] } }))
-                  }
-                >
-                  ＋ 添加时间点
-                </button>
-              ) : null}
-            </label>
-
-            <label className="field">
-              <span className="field-label">发送模式</span>
+              <span className="field-label">预制音色（必选）</span>
               <select
-                value={form.proactive.mode}
-                onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, mode: e.target.value as "always" | "smart" | "probability" } }))}
+                value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voiceId) ? form.voiceId : ""}
+                onChange={(e) => setForm((p) => ({ ...p, voiceId: e.target.value || "冰糖" }))}
               >
-                <option value="always">到点必发</option>
-                <option value="smart">智能判断（按人设/关系/上下文决定是否发）</option>
-                <option value="probability">按概率发送（掷骰决定是否发）</option>
+                {MIMO_VOICE_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
               </select>
             </label>
+          )}
 
-            {form.proactive.mode === "probability" ? (
-              <>
-                <label className="field">
-                  <span className="field-label">全局发送概率（1–100，按百分比）</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={form.proactive.probability ?? 100}
-                    onChange={(e) => {
-                      const v = Math.min(100, Math.max(1, Number(e.target.value) || 1));
-                      setForm((p) => ({ ...p, proactive: { ...p.proactive, probability: v } }));
-                    }}
-                  />
-                  <small className="field-hint">到点时按此概率决定是否推送；不填视为必发（100%）。</small>
-                </label>
-                <label className="field">
-                  <span className="field-label">各时间点单独概率（可选，覆盖全局）</span>
-                  {form.proactive.timePoints.map((tp) => (
-                    <div key={tp} className="timepoint-row">
-                      <span style={{ minWidth: 48 }}>{tp}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={form.proactive.timePointProbabilities?.[tp] ?? form.proactive.probability ?? 100}
-                        onChange={(e) => {
-                          const v = Math.min(100, Math.max(1, Number(e.target.value) || 1));
-                          const tpp = { ...(form.proactive.timePointProbabilities || {}) };
-                          tpp[tp] = v;
-                          setForm((p) => ({ ...p, proactive: { ...p.proactive, timePointProbabilities: tpp } }));
-                        }}
-                      />
-                      <span>%</span>
-                    </div>
-                  ))}
-                </label>
-              </>
-            ) : null}
+          {form.audioModel === "mimo-v2.5-tts" && (
+            <label className="field">
+              <span className="field-label">风格描述（可选）</span>
+              <input
+                value={form.stylePrompt}
+                onChange={(e) => setForm((p) => ({ ...p, stylePrompt: e.target.value }))}
+                placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
+              />
+              <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
+            </label>
+          )}
 
+          {form.audioModel === "mimo-v2.5-tts-voicedesign" && (
+            <label className="field">
+              <span className="field-label">音色描述（必填）</span>
+              <input
+                value={form.voiceDesignPrompt}
+                onChange={(e) => setForm((p) => ({ ...p, voiceDesignPrompt: e.target.value }))}
+                placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
+              />
+              <small>这段文字会作为音色设计描述传给模型。</small>
+            </label>
+          )}
+
+          {form.audioModel === "mimo-v2.5-tts-voiceclone" && (
+            <label className="field">
+              <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
+              <label className="file-picker">
+                选择音频样本
+                <input type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav" onChange={(e) => handleVoiceCloneFile(e.currentTarget.files)} />
+              </label>
+              {form.voiceCloneSample ? (
+                <small className="field-hint">已上传样本（{(form.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
+              ) : null}
+            </label>
+          )}
+        </FormSection>
+
+        <FormSection title="性格与关系" desc="默认情绪与互动语气">
+          <label className="field">
+            <span className="field-label">默认情绪</span>
+            <select
+              value={form.defaultMood}
+              onChange={(e) => setForm((p) => ({ ...p, defaultMood: e.target.value as (typeof moods)[number] }))}
+            >
+              {moods.map((mood) => (
+                <option key={mood} value={mood}>{moodLabelMap[mood]}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span className="field-label">关系模式</span>
+            <select
+              value={form.relationshipMode}
+              onChange={(e) => setForm((p) => ({ ...p, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))}
+            >
+              {relationshipModes.map((mode) => (
+                <option key={mode} value={mode}>{relationshipModeLabelMap[mode]}</option>
+              ))}
+            </select>
+            <small className="field-hint">决定她和你互动的整体语气。</small>
+          </label>
+        </FormSection>
+
+        <FormSection title="连接与位置" desc="专属 Bot 与真实时间/天气">
+          <label className="field dh-span-full">
+            <span className="field-label">Telegram 专属 Bot Token（可选）</span>
+            <input
+              value={form.telegramBotToken}
+              onChange={(e) => setForm((p) => ({ ...p, telegramBotToken: e.target.value }))}
+              placeholder="配置后该数字人以独立 bot 运行；留空=不修改（编辑时清空保存=关闭）"
+            />
+            <small>配置了专属 bot 才能开启主动推送。</small>
+          </label>
+
+          <label className="field dh-span-full">
+            <span className="field-label">所在城市（用于感知真实时间 / 天气）</span>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <select
+                value={form.location?.province || ""}
+                onChange={(e) => {
+                  const province = e.target.value;
+                  const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[province] || [];
+                  const first = cities[0];
+                  setForm((p) => ({
+                    ...p,
+                    location: first ? { province, city: first.name, latitude: first.lat, longitude: first.lon } : null
+                  }));
+                }}
+              >
+                <option value="">选择省份</option>
+                {(Object.keys(chinaCities) as string[]).map((prov) => (
+                  <option key={prov} value={prov}>{prov}</option>
+                ))}
+              </select>
+              <select
+                value={form.location?.city || ""}
+                disabled={!form.location?.province}
+                onChange={(e) => {
+                  const cityName = e.target.value;
+                  const cities = (chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location?.province || ""] || [];
+                  const city = cities.find((c) => c.name === cityName);
+                  if (city && form.location) {
+                    setForm((p) => ({
+                      ...p,
+                      location: { province: form.location!.province, city: city.name, latitude: city.lat, longitude: city.lon }
+                    }));
+                  }
+                }}
+              >
+                <option value="">选择城市</option>
+                {form.location?.province
+                  ? ((chinaCities as Record<string, Array<{ name: string; lat: number; lon: number }>>)[form.location.province] || []).map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}</option>
+                    ))
+                  : null}
+              </select>
+            </div>
+            {form.location ? (
+              <small className="field-hint">
+                已设为 {form.location.province} · {form.location.city}（{form.location.latitude.toFixed(2)}, {form.location.longitude.toFixed(2)}），数字人将感知她当地的真实时间与天气。
+              </small>
+            ) : (
+              <small className="field-hint">设置后，聊天和主动推送会带上她所在地的真实时间/天气/气温。</small>
+            )}
+          </label>
+        </FormSection>
+
+        <FormSection title="主动推送" desc="专属 bot 主动给主人发消息">
+          <div className="field dh-span-full">
+            <span className="field-label">主动推送开关</span>
             <label className="inline-check">
               <input
                 type="checkbox"
-                checked={form.proactive.voiceEnabled}
-                onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, voiceEnabled: e.target.checked } }))}
+                checked={form.proactive.enabled}
+                onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, enabled: e.target.checked } }))}
               />
-              主动推送附带语音（消耗 MiMo TTS 额度，默认关）
+              启用主动推送（专属 bot 主动给主人发消息）
             </label>
-          </>
-        ) : null}
+          </div>
 
-        {/* 关系与记忆：按角色独立配置（A 关系状态 / B 关于你 / C 关系记忆） */}
-        <fieldset className="dh-memory-group">
-          <legend>关系备注（A · 关系状态）</legend>
-          <label className="field">
-            <span className="field-label">关系备注</span>
+          {form.proactive.enabled ? (
+            <>
+              <label className="field dh-span-full">
+                <span className="field-label">发送时间点（最多 3 个，按北京时间）</span>
+                {form.proactive.timePoints.map((tp, i) => (
+                  <div key={i} className="timepoint-row">
+                    <input
+                      type="time"
+                      value={tp}
+                      onChange={(e) => {
+                        const v = [...form.proactive.timePoints];
+                        v[i] = e.target.value;
+                        setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: v } }));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const v = form.proactive.timePoints.filter((_, j) => j !== i);
+                        setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: v } }));
+                      }}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+                {form.proactive.timePoints.length < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((p) => ({ ...p, proactive: { ...p.proactive, timePoints: [...p.proactive.timePoints, "20:00"] } }))
+                    }
+                  >
+                    ＋ 添加时间点
+                  </button>
+                ) : null}
+              </label>
+
+              <label className="field">
+                <span className="field-label">发送模式</span>
+                <select
+                  value={form.proactive.mode}
+                  onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, mode: e.target.value as "always" | "smart" | "probability" } }))}
+                >
+                  <option value="always">到点必发</option>
+                  <option value="smart">智能判断（按人设/关系/上下文决定是否发）</option>
+                  <option value="probability">按概率发送（掷骰决定是否发）</option>
+                </select>
+              </label>
+
+              {form.proactive.mode === "probability" ? (
+                <>
+                  <label className="field">
+                    <span className="field-label">全局发送概率（1–100，按百分比）</span>
+                    <ProbabilitySlider
+                      value={form.proactive.probability ?? 100}
+                      onChange={(v) => setForm((p) => ({ ...p, proactive: { ...p.proactive, probability: v } }))}
+                    />
+                    <small className="field-hint">到点时按此概率决定是否推送；不填视为必发（100%）。</small>
+                  </label>
+                  <label className="field dh-span-full">
+                    <span className="field-label">各时间点单独概率（可选，覆盖全局）</span>
+                    {form.proactive.timePoints.map((tp) => (
+                      <div key={tp} className="timepoint-row">
+                        <span style={{ minWidth: 48 }}>{tp}</span>
+                        <ProbabilitySlider
+                          value={form.proactive.timePointProbabilities?.[tp] ?? form.proactive.probability ?? 100}
+                          onChange={(v) => {
+                            const tpp = { ...(form.proactive.timePointProbabilities || {}) };
+                            tpp[tp] = v;
+                            setForm((p) => ({ ...p, proactive: { ...p.proactive, timePointProbabilities: tpp } }));
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </label>
+                </>
+              ) : null}
+
+              <div className="field dh-span-full">
+                <span className="field-label">语音附带</span>
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={form.proactive.voiceEnabled}
+                    onChange={(e) => setForm((p) => ({ ...p, proactive: { ...p.proactive, voiceEnabled: e.target.checked } }))}
+                  />
+                  主动推送附带语音（消耗 MiMo TTS 额度，默认关）
+                </label>
+              </div>
+            </>
+          ) : null}
+        </FormSection>
+
+        <FormSection title="关系与记忆" desc="按角色独立配置" defaultOpen={!isMobile}>
+          <label className="field dh-span-full">
+            <span className="field-label">关系备注（A · 关系状态）</span>
             <textarea
               rows={2}
               value={memory.relationshipNotes || ""}
@@ -726,10 +807,6 @@ function CharacterForm({
               placeholder="例如：关系节奏偏暧昧、直接、陪伴感强"
             />
           </label>
-        </fieldset>
-
-        <fieldset className="dh-memory-group">
-          <legend>关于你（B · 玩家设定，可按角色不同）</legend>
           <label className="field">
             <span className="field-label">我是谁 / 假身份</span>
             <input
@@ -746,7 +823,7 @@ function CharacterForm({
               placeholder="例如：哥哥 / 阿林 / 亲爱的"
             />
           </label>
-          <label className="field">
+          <label className="field dh-span-full">
             <span className="field-label">聊天偏好</span>
             <textarea
               rows={2}
@@ -755,11 +832,7 @@ function CharacterForm({
               placeholder="例如：语气自然一点，开心时可以撒娇，压力大时先安慰"
             />
           </label>
-        </fieldset>
-
-        <fieldset className="dh-memory-group">
-          <legend>你们的关系记忆（C · 按角色独立）</legend>
-          <label className="field">
+          <label className="field dh-span-full">
             <span className="field-label">重要事实</span>
             <textarea
               rows={2}
@@ -768,7 +841,7 @@ function CharacterForm({
               placeholder="例如：最近在做 AI伴聊 项目、经常晚上工作"
             />
           </label>
-          <label className="field">
+          <label className="field dh-span-full">
             <span className="field-label">聊天禁忌或边界</span>
             <textarea
               rows={2}
@@ -777,7 +850,7 @@ function CharacterForm({
               placeholder="例如：不要说教；不喜欢机械式客服语气"
             />
           </label>
-        </fieldset>
+        </FormSection>
 
         {status ? <small className="field-hint">{status}</small> : null}
         <div className="dh-form-actions">
@@ -787,6 +860,7 @@ function CharacterForm({
           </button>
         </div>
       </form>
+
     </div>
   );
 }

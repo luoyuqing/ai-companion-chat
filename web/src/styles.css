@@ -2565,21 +2565,133 @@ select {
 }
 .dh-back-btn:hover { border-color: #a879ff; color: #fff; }
 
-/* 表单在宽屏下两列排布，避免细长滚动 */
+/* 表单：分区卡片纵向堆叠 */
 .dh-form-panel .creator-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border-top: none;
+  padding-top: 0;
+}
+.dh-span-full { grid-column: 1 / -1; }
+
+/* 分区卡片 */
+.dh-section {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+.dh-section-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.dh-section-head:hover { background: rgba(255, 255, 255, 0.08); }
+.dh-section-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: #f3eefc;
+}
+.dh-section-desc {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(240, 234, 255, 0.5);
+}
+.dh-section-toggle {
+  font-size: 13px;
+  color: rgba(240, 234, 255, 0.6);
+  transition: transform 0.2s ease;
+}
+.dh-section-toggle.open { transform: rotate(180deg); }
+.dh-section-body {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 14px 20px;
   align-items: start;
+  padding: 14px 16px 16px;
 }
-.dh-form-panel .creator-v2 > .dh-form-actions,
-.dh-form-panel .creator-v2 > .dh-span-full,
-.dh-form-panel .creator-v2 > details,
-.dh-form-panel .creator-v2 > h4,
-.dh-form-panel .creator-v2 > .field-hint {
-  grid-column: 1 / -1;
+.dh-section-body .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.dh-form-panel .creator-v2 > .field textarea { min-height: 64px; }
+.dh-section-body .field-label {
+  font-size: 13px;
+  color: rgba(240, 234, 255, 0.72);
+  font-weight: 500;
+}
+.dh-section-body .field > input,
+.dh-section-body .field > select,
+.dh-section-body .field > textarea {
+  width: 100%;
+}
+.dh-section-body .field textarea { min-height: 64px; }
+
+/* 概率滑块 + 快捷档位 */
+.prob-field { display: flex; flex-direction: column; gap: 8px; }
+.prob-row { display: flex; align-items: center; gap: 12px; }
+.prob-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+.prob-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #a879ff;
+  border: 2px solid #fff;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(168, 121, 255, 0.25);
+}
+.prob-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #a879ff;
+  border: 2px solid #fff;
+  cursor: pointer;
+}
+.prob-value {
+  min-width: 46px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d9c6ff;
+}
+.prob-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.prob-chip {
+  padding: 7px 14px;
+  min-height: 38px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(240, 234, 255, 0.78);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.prob-chip:hover { border-color: #a879ff; color: #fff; }
+.prob-chip.active {
+  background: rgba(168, 121, 255, 0.22);
+  border-color: #a879ff;
+  color: #fff;
+}
 
 .dh-form-actions {
   display: flex;
@@ -2604,7 +2716,11 @@ select {
 @media (max-width: 720px) {
   .dh-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
   .dh-action { font-size: 11px; padding: 9px 2px; }
-  .dh-form-panel .creator-v2 { grid-template-columns: 1fr; }
+  .dh-section-body { grid-template-columns: 1fr; gap: 12px; }
+  .dh-section-body .field > input,
+  .dh-section-body .field > select,
+  .dh-section-body .field > textarea { font-size: 16px; }
+  .prob-chip { flex: 1; min-width: 52px; text-align: center; }
 }
 
 /* 关系与记忆分组（数字人编辑页，按角色独立） */
