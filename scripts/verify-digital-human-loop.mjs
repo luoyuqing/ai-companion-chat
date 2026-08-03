@@ -183,7 +183,7 @@ async function main() {
       body: JSON.stringify({
         name: `verify-loop-${Date.now()}`,
         description: "用于闭环验收",
-        avatarUrl: "/assets/avatars/lina.svg",
+        avatarUrl: "/assets/avatars/linxingwan.svg",
         modelUrl: uploadedModel.modelUrl,
         voiceProvider: "local",
         voice: "nova",
