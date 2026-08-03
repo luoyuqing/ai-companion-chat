@@ -148,7 +148,7 @@ function fromCharacter(c: DigitalHuman): NewCharacterForm {
       ? (c.defaultMood as LocalEmotion)
       : "neutral",
     emotionProfile: c.emotionProfile ? JSON.stringify(c.emotionProfile) : "{}",
-    avatarType: c.avatarType === "video" ? "video" : "image",
+    avatarType: "image",
     avatarVideoProfile: c.avatarVideoProfile ? JSON.stringify(c.avatarVideoProfile) : "{}",
     personalityTagline: c.personalityTagline || "",
     relationshipMode: relationshipModes.includes((c.relationshipMode || "sweet") as (typeof relationshipModes)[number])
@@ -486,7 +486,8 @@ function CharacterForm({
 
           <label className="field dh-span-full">
             <span className="field-label">人设描述</span>
-            <input
+            <textarea
+              rows={3}
               value={form.description}
               onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
               placeholder="她的性格、身份、说话风格，例如：温柔懂事的女大学生"
@@ -517,14 +518,6 @@ function CharacterForm({
               />
             ) : null}
           </div>
-
-          <label className="field">
-            <span className="field-label">头像模式</span>
-            <select value={form.avatarType} onChange={(e) => setForm((p) => ({ ...p, avatarType: e.target.value === "video" ? "video" : "image" }))}>
-              <option value="image">静态头像</option>
-              <option value="video">动态视频（需额外提供情绪视频资源）</option>
-            </select>
-          </label>
 
           <label className="field">
             <span className="field-label">人设口令（可选）</span>
@@ -564,7 +557,8 @@ function CharacterForm({
           {form.audioModel === "mimo-v2.5-tts" && (
             <label className="field">
               <span className="field-label">风格描述（可选）</span>
-              <input
+              <textarea
+                rows={3}
                 value={form.stylePrompt}
                 onChange={(e) => setForm((p) => ({ ...p, stylePrompt: e.target.value }))}
                 placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
@@ -576,7 +570,8 @@ function CharacterForm({
           {form.audioModel === "mimo-v2.5-tts-voicedesign" && (
             <label className="field">
               <span className="field-label">音色描述（必填）</span>
-              <input
+              <textarea
+                rows={3}
                 value={form.voiceDesignPrompt}
                 onChange={(e) => setForm((p) => ({ ...p, voiceDesignPrompt: e.target.value }))}
                 placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
@@ -801,7 +796,7 @@ function CharacterForm({
           <label className="field dh-span-full">
             <span className="field-label">关系备注（A · 关系状态）</span>
             <textarea
-              rows={2}
+              rows={4}
               value={memory.relationshipNotes || ""}
               onChange={(e) => setMemory((p) => ({ ...p, relationshipNotes: e.target.value }))}
               placeholder="例如：关系节奏偏暧昧、直接、陪伴感强"
@@ -826,7 +821,7 @@ function CharacterForm({
           <label className="field dh-span-full">
             <span className="field-label">聊天偏好</span>
             <textarea
-              rows={2}
+              rows={4}
               value={memory.preferences || ""}
               onChange={(e) => setMemory((p) => ({ ...p, preferences: e.target.value }))}
               placeholder="例如：语气自然一点，开心时可以撒娇，压力大时先安慰"
@@ -835,7 +830,7 @@ function CharacterForm({
           <label className="field dh-span-full">
             <span className="field-label">重要事实</span>
             <textarea
-              rows={2}
+              rows={4}
               value={memory.importantFacts || ""}
               onChange={(e) => setMemory((p) => ({ ...p, importantFacts: e.target.value }))}
               placeholder="例如：最近在做 AI伴聊 项目、经常晚上工作"
@@ -844,7 +839,7 @@ function CharacterForm({
           <label className="field dh-span-full">
             <span className="field-label">聊天禁忌或边界</span>
             <textarea
-              rows={2}
+              rows={4}
               value={memory.boundaries || ""}
               onChange={(e) => setMemory((p) => ({ ...p, boundaries: e.target.value }))}
               placeholder="例如：不要说教；不喜欢机械式客服语气"

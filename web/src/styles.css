@@ -2633,7 +2633,7 @@ select {
 .dh-section-body .field > textarea {
   width: 100%;
 }
-.dh-section-body .field textarea { min-height: 64px; }
+.dh-section-body .field textarea { min-height: 96px; resize: vertical; overflow: auto; }
 
 /* 概率滑块 + 快捷档位 */
 .prob-field { display: flex; flex-direction: column; gap: 8px; }
