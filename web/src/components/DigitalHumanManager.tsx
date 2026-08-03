@@ -519,9 +519,10 @@ function CharacterForm({
             ) : null}
           </div>
 
-          <label className="field">
+          <label className="field dh-span-full">
             <span className="field-label">人设口令（可选）</span>
-            <input
+            <textarea
+              rows={3}
               value={form.personalityTagline}
               onChange={(e) => setForm((p) => ({ ...p, personalityTagline: e.target.value }))}
               placeholder="例如：轻松撒娇，但不越界"
