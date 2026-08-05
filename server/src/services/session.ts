@@ -20,7 +20,7 @@ export interface SessionRecord {
 }
 
 const SESSION_DIR = path.join(WORKSPACE_ROOT, "server", "src", "data", "sessions");
-const MAX_TURNS_PER_SESSION = 200;
+const MAX_TURNS_PER_SESSION = 2000;
 const MAX_SIGNAL_COUNT = 4;
 
 const AFFINITY_BOOST_KEYWORDS: Record<SessionContext["relationshipAffinity"], string[]> = {
@@ -195,7 +195,7 @@ export async function appendToSession(
 
   const existing = await loadSession(safeId);
   const nextHistory = existing ? [...existing.history] : [];
-  nextHistory.push(message);
+  nextHistory.push({ ...message, ts: Date.now() });
   if (nextHistory.length > MAX_TURNS_PER_SESSION) {
     nextHistory.splice(0, nextHistory.length - MAX_TURNS_PER_SESSION);
   }

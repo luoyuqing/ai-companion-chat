@@ -7,6 +7,7 @@ import {
   updateSessionMeta
 } from "../services/session";
 import { recordChat } from "../services/stats";
+import { getUserMemory, saveUserMemory } from "../services/userMemory";
 import { getCharacters, resolveCharacter } from "./data";
 import { markUserActivity } from "./activity";
 import {
@@ -54,6 +55,32 @@ export function shouldSummarize(totalMessages: number, hasMemory: boolean): bool
   return (totalMessages - SUMMARY_THRESHOLD) % SUMMARY_INTERVAL === 0;
 }
 
+// 把 Unix 毫秒时间戳格式化为「2026-08-03 周一 21:14」可读串（统一 Asia/Shanghai，与实时块一致）；无值回退"时间未知"。
+export function formatMsgTimestamp(ts?: number): string {
+  if (!ts || !Number.isFinite(ts)) return "时间未知";
+  const d = new Date(ts);
+  const fmt = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const p: Record<string, string> = {};
+  for (const part of fmt.formatToParts(d)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day} ${p.weekday} ${p.hour}:${p.minute}`;
+}
+
+// 给一条历史消息加「（用户·时间）」前缀，让模型感知其真实发生时刻；系统消息与时间未知者原样保留。
+export function withTimestampPrefix(m: ChatMessage): ChatMessage {
+  if (m.role === "system") return m;
+  const who = m.role === "user" ? "用户" : "助手";
+  return { ...m, content: `（${who}·${formatMsgTimestamp(m.ts)}）${m.content}` };
+}
+
 /**
  * 构造实际发给模型的对话历史：
  * - 总结模式关闭：原样返回（场景系统消息在前）
@@ -69,7 +96,7 @@ export function buildModelHistory(params: {
 }): ChatMessage[] {
   const sceneMessages = params.sceneMessages ?? [];
   if (!params.summaryMode) {
-    return [...sceneMessages, ...params.history];
+    return [...sceneMessages, ...params.history.map(withTimestampPrefix)];
   }
   const recents = params.history
     .filter((m) => m.role !== "system")
@@ -81,7 +108,7 @@ export function buildModelHistory(params: {
       content: `长期记忆档案（据此延续对话，无需向用户复述档案内容）：\n${params.memoryFile}`
     });
   }
-  result.push(...recents);
+  result.push(...recents.map(withTimestampPrefix));
   return result;
 }
 
@@ -150,6 +177,17 @@ export async function runChat(opts: {
     const style = getResponseStyleById(styleId) ?? getDefaultResponseStyle();
     systemMessages.push(buildStyleSystemMessage(style));
   }
+
+  // B4：跨会话时间锚点——让数字人感知"上次聊天发生在何时"，并刷新本次聊天时间为真实时刻
+  const memBefore = await getUserMemory(character.id);
+  if (memBefore.lastChatAt) {
+    const lastStr = formatMsgTimestamp(Date.parse(memBefore.lastChatAt));
+    systemMessages.push({
+      role: "system",
+      content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
+    });
+  }
+  await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
 
   // 总结模式下只把「记忆档案 + 最近窗口」发给模型，避免短上下文模型超限
   const modelHistory = buildModelHistory({

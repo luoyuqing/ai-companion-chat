@@ -24,8 +24,9 @@ import {
 } from "./types";
 
 // 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
-import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize } from "./core/chat";
+import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize, formatMsgTimestamp, withTimestampPrefix } from "./core/chat";
 import { markUserActivity } from "./core/activity";
+import { getUserMemory, saveUserMemory } from "./services/userMemory";
 import {
   applyCharacterPatch,
   AUDIO_DIR,
@@ -568,11 +569,26 @@ app.post("/api/chat/stream", async (req, res) => {
     const existingSession = await loadSession(sessionId);
     const rawHistory = body.history?.length ? normalizeHistory(body.history) : (existingSession?.history ?? []);
 
-    // 总结模式：只把「记忆档案 + 最近窗口」发给模型，避免短上下文模型超限
+    // B4：跨会话时间锚点（流式路径与 /api/chat 一致，让数字人知道上次聊天何时）
+    const memBefore = await getUserMemory(character.id);
+    const anchorMsgs: ChatMessage[] = [];
+    if (memBefore.lastChatAt) {
+      const lastStr = formatMsgTimestamp(Date.parse(memBefore.lastChatAt));
+      anchorMsgs.push({
+        role: "system",
+        content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
+      });
+    }
+    await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
+
+    // B3：历史消息统一加时间前缀（无论是否总结模式），时间锚点作为场景系统消息置顶
     const summaryMode = isSummaryModeEnabled(existingSession?.summaryMode);
-    const history = summaryMode
-      ? buildModelHistory({ history: rawHistory, summaryMode, memoryFile: existingSession?.memoryFile })
-      : rawHistory;
+    const history = buildModelHistory({
+      history: rawHistory,
+      summaryMode,
+      memoryFile: existingSession?.memoryFile,
+      sceneMessages: anchorMsgs
+    });
 
     res.status(200);
     res.set({
