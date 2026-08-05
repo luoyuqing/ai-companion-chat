@@ -6,9 +6,11 @@ import dns from "node:dns";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile, session, SessionFlavor, Api, RawApi } from "grammy";
 
 import { runChat, generateMemoryForSession } from "../core/chat";
+import { markUserActivity } from "../core/activity";
+import { getRunningHubConfig } from "../core/config";
 import {
   applyCharacterPatch,
   AVATAR_DIR,
@@ -31,10 +33,16 @@ import {
 } from "../core/scenes";
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
-import { clearSession, importSession, loadSession, updateSessionMeta } from "../services/session";
+import { runPhotoTask, PhotoTimeoutError } from "../services/photoGen";
+import { recordPhoto } from "../services/stats";
+import { clearSession, appendToSession, importSession, loadSession, updateSessionMeta } from "../services/session";
 import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
 
 const execFileAsync = promisify(execFile);
+
+// 拍照等待期锁：key 为 chatSessionId。命中期间用户发来的任何消息都只记为「未读」，不回复、不再触发。
+// 自然按数字人隔离：chatSessionId 含角色 id（固定角色为 mem-<id>），不同角色互不影响。
+const photoPending = new Set<string>();
 
 // 强制 Node 优先 IPv4 解析：境外服务器常无可用 IPv6 路由，undici fetch 先试 IPv6 会 ETIMEDOUT
 // （Telegram 文件下载 api.telegram.org/file/... 因此超时）。改为 ipv4first 后走通。
@@ -187,36 +195,90 @@ async function oggToWavBase64(oggPath: string): Promise<{ base64: string; mime: 
   return { base64: buf.toString("base64"), mime: "audio/wav" };
 }
 
+// 判断是否为可重试的网络/限流类错误：
+// - Node 网络层错误（ETIMEDOUT / ECONNRESET / ENOTFOUND / EAI_AGAIN / ECONNREFUSED）
+// - grammy 包裹的 FetchError（message 含 "Network request for ... failed"）
+// - Telegram 限流 429（Too Many Requests）
+function isNetworkError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; message?: string; error?: unknown };
+  if (["ETIMEDOUT", "ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED"].includes(e.code ?? "")) {
+    return true;
+  }
+  const msg = typeof e.message === "string" ? e.message : "";
+  if (/Network request for .* failed/i.test(msg)) return true;
+  if (/Too Many Requests/i.test(msg)) return true;
+  if (e.error) return isNetworkError(e.error); // 递归判断嵌套的 FetchError
+  return false;
+}
+
+// 对单条 Telegram 发送做指数退避重试，仅网络/限流类错误才重试，业务错误（如 400/403）直接抛出。
+async function withRetry<T>(label: string, fn: () => Promise<T>, retries = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isNetworkError(err)) throw err;
+      lastErr = err;
+      if (attempt < retries) {
+        const delay = 500 * Math.pow(2, attempt); // 500ms, 1000ms, 2000ms
+        console.warn(`[TG][${label}] 网络错误，准备第 ${attempt + 2} 次重试：${(err as Error).message?.slice(0, 100) ?? err}`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+// 纯 API 版「文本 + 可选语音」发送：供交互聊天（ctx 包裹）与主动推送（无 ctx）共用。
+// voiceEnabled=false 时只发文字，不消耗 TTS 额度（主动推送默认关闭以省额度）。
+async function sendTextWithOptionalVoice(
+  api: Api<RawApi>,
+  chatId: number,
+  text: string,
+  character: DigitalHumanConfig,
+  voiceEnabled: boolean
+): Promise<void> {
+  // 主文字：网络抖动时重试，避免已生成的回复因偶发超时被吞掉
+  await withRetry("sendMessage", () => api.sendMessage(chatId, text.slice(0, 4000)), 3);
+  if (!voiceEnabled) return;
+  try {
+    const audioUrl = await synthesizeSpeech(text, character);
+    if (!audioUrl) return;
+    const audioPath = audioUrlToPath(audioUrl);
+    if (!audioPath) return;
+    if (!(await fs.stat(audioPath).catch(() => null))) return;
+    // Telegram 语音消息仅支持 OGG/Opus 容器，MiMo 产出的是 MP3，需转码
+    const oggPath = path.join(
+      os.tmpdir(),
+      `dg-voice-${Date.now()}-${Math.random().toString(16).slice(2)}.ogg`
+    );
+    try {
+      await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
+      await withRetry("sendVoice", () => api.sendVoice(chatId, new InputFile(oggPath)), 2);
+      await fs.unlink(oggPath).catch(() => {});
+    } catch (convErr) {
+      console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
+      await withRetry("sendAudio", () => api.sendAudio(chatId, new InputFile(audioPath)), 2);
+    }
+    await fs.unlink(audioPath).catch(() => {});
+  } catch (err) {
+    console.warn("TG 语音合成失败：", err instanceof Error ? err.message : err);
+  }
+}
+
 async function replyWithTextAndVoice(
   ctx: BotContext,
   text: string,
   character: DigitalHumanConfig
 ): Promise<void> {
-  await ctx.reply(text.slice(0, 4000));
-  if (!ctx.session.voiceEnabled) return;
-  try {
-    const audioUrl = await synthesizeSpeech(text, character);
-    if (!audioUrl) return;
-    const audioPath = audioUrlToPath(audioUrl);
-    if (audioPath && (await fs.stat(audioPath).catch(() => null))) {
-      // Telegram 语音消息仅支持 OGG/Opus 容器，MiMo 产出的是 MP3，需转码
-      const oggPath = path.join(
-        os.tmpdir(),
-        `dg-voice-${Date.now()}-${Math.random().toString(16).slice(2)}.ogg`
-      );
-      try {
-        await execFileAsync("ffmpeg", ["-y", "-i", audioPath, "-c:a", "libopus", "-b:a", "64k", oggPath]);
-        await ctx.replyWithVoice(new InputFile(oggPath));
-        await fs.unlink(oggPath).catch(() => {});
-      } catch (convErr) {
-        console.warn("TG 语音转码失败，回退为发送音频文件：", convErr);
-        await ctx.replyWithAudio(new InputFile(audioPath));
-      }
-      await fs.unlink(audioPath).catch(() => {});
-    }
-  } catch (err) {
-    console.warn("TG 语音合成失败：", err instanceof Error ? err.message : err);
+  const chatId = ctx.chat?.id;
+  if (chatId == null) {
+    await ctx.reply(text.slice(0, 4000));
+    return;
   }
+  await sendTextWithOptionalVoice(ctx.api, chatId, text, character, ctx.session.voiceEnabled);
 }
 
 // ---------- wizard builders ----------
@@ -277,7 +339,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     const charId = fixedId || ctx.session.currentCharacterId || "default";
     const ownerId = loadOwner();
     if (ownerId != null && ctx.from?.id === ownerId) {
-      return `mem:${charId}`;
+      return `mem-${charId}`;
     }
     const chatId = ctx.chat?.id ?? ctx.from?.id ?? 0;
     return `tg-${chatId}-${charId}`;
@@ -302,6 +364,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         sessionId: chatSessionId(ctx),
         message,
         characterId: character.id,
+        channel: "tg",
         relationshipMode: sceneOverride
           ? (getSceneById(sceneOverride)?.relationshipMode ?? character.relationshipMode)
           : undefined,
@@ -312,7 +375,129 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     );
   }
 
-  bot.use(session({ initial: (): BotSessionData => ({ voiceEnabled: false }) }));
+  // 判断消息是否包含任一触发词（可配置多个，至少保留���个）
+  function containsTrigger(text: string, words?: string[]): string | null {
+    if (!words || words.length === 0) return null;
+    for (const w of words) {
+      if (w && text.includes(w)) return w;
+    }
+    return null;
+  }
+
+  // 将拍照等待期用户发来的消息记为「未读」（仅落盘到会话历史，不触发回复）
+  async function recordUnread(sid: string, text: string): Promise<void> {
+    try {
+      await appendToSession(sid, { role: "user", content: text });
+    } catch (e) {
+      console.error("记录未读消息失败:", e);
+    }
+  }
+
+  // 统一处理「拍照触发词检测 + 拍照等待期拦截」：
+  // 文字消息与语音转写后的文本都走这里，保证两种入口行为一致。
+  // 返回 true 表示已处理（触发生图或处于等待期拦截），上层应 return 不再走普通聊天。
+  async function tryPhotoTrigger(ctx: BotContext, text: string): Promise<boolean> {
+    // 用户主动发消息（任意入口：普通聊天/语音/拍照等待期）都视为「正在聊天」，标记活跃以抑制主动推送
+    try {
+      const c = await currentCharacter(ctx);
+      if (c) markUserActivity(c.id);
+    } catch {
+      /* 打点失败不影响聊天 */
+    }
+    const sid = chatSessionId(ctx);
+    // 拍照等待期：任何消息（文字/语音）都记为未读，不回复、不重复触发
+    if (photoPending.has(sid)) {
+      await recordUnread(sid, text);
+      return true;
+    }
+    const rhCfg = getRunningHubConfig();
+    const hit = containsTrigger(text, rhCfg.triggerWords);
+    if (hit) {
+      const character = await currentCharacter(ctx);
+      if (!character) {
+        await ctx.reply("请先用 /list 选择一个数字人再聊天。");
+        return true;
+      }
+      console.log(`[RB][${character.name}] 触发生图 触发词=${hit} chatId=${ctx.chat?.id}`);
+      photoPending.add(sid);
+      // 触发消息本身也记为未读，便于照片回来后统一回复（含触发语里的其它内容）
+      await recordUnread(sid, text);
+      await ctx.reply("📷 好的，那我去拍张照，稍等一下下哦~");
+      // 异步执行，不阻塞；等待期内的用户消息由 photoPending 拦截为「未读」
+      void runPhotoFlow(ctx, character, sid).catch((err) => {
+        console.error("[拍照] 流程异常:", err);
+        photoPending.delete(sid);
+      });
+      return true;
+    }
+    return false;
+  }
+
+  // 拍照主流程（异步、不阻塞）：
+  // 1) 生成并发送照片；期间用户消息全部记为未读、不回复；
+  // 2) 照片发出（或接口报错/超时）后，基于等待期累积的未读上下文，统一回复「一条」消息，
+  //    模拟「忙完拍照回来，再统一看未读消息回复」的真实场景。
+  async function runPhotoFlow(ctx: BotContext, character: DigitalHumanConfig, sid: string): Promise<void> {
+    const chatId = ctx.chat?.id;
+    const cfg = getRunningHubConfig();
+    const timeoutMs = Math.max(10, Math.min(600, Number(cfg.timeoutSec) || 120)) * 1000;
+
+    let photoPath: string | null = null;
+    let cleanup: (() => void) | null = null;
+    let outcome: "ok" | "error" | "timeout" = "ok";
+    let errMsg: string | null = null;
+
+    try {
+      const session = await loadSession(sid);
+      const recent = (session?.history ?? []).slice(-12);
+      const res = await runPhotoTask({ character, recentMessages: recent, timeoutMs });
+      photoPath = res.imagePath;
+      cleanup = res.cleanup;
+    } catch (err) {
+      outcome = err instanceof PhotoTimeoutError ? "timeout" : "error";
+      errMsg = err instanceof Error ? err.message : String(err);
+      // 打印完整报错信息与堆栈，便于排查 RunningHub 接口异常
+      console.error(
+        `[RB][${character.name}] ${outcome === "timeout" ? "超时" : "接口报错"}:`,
+        errMsg,
+        err instanceof Error && err.stack ? `\n${err.stack}` : ""
+      );
+    }
+
+    try {
+      if (photoPath) {
+        if (chatId != null) {
+          // 发送照片：套网络重试，避免生成成功却因到 api.telegram.org 的瞬时抖动而丢图（2026-08-01 09:35 同类问题）
+          await withRetry(`[${character.name}] sendPhoto`, async () => {
+            await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
+            await ctx.api.sendPhoto(chatId, new InputFile(photoPath!));
+          });
+          recordPhoto(character.id, "tg"); // 统计：生图成功回发 +1（仅 TG 端）
+        }
+      } else {
+        const label = outcome === "timeout" ? "拍照超时了" : "拍照失败了";
+        // 失败提示也套网络重试，避免 Telegram 瞬时超时把错误通知吞掉（2026-08-03 22:36 夏知微静默丢图）
+        await withRetry(`[${character.name}] 拍照失败提示`, () =>
+          ctx.reply(`📷 ${label}${errMsg ? "：" + errMsg.slice(0, 120) : ""}`)
+        );
+      }
+
+      // 照片发出（或失败后）：基于等待期累积的未读消息，统一回复「一条」
+      const backMessage = "（刚拍完照回来啦，照片已经发给你咯~ 你刚才跟我说的那些我都看到啦，挨个回你）";
+      try {
+        const result = await runChatWithContext(ctx, backMessage);
+        await replyWithTextAndVoice(ctx, result.text, result.character);
+      } catch (replyErr) {
+        console.error(`[RB][${character.name}] 照片后统一回复失败:`, replyErr);
+        await ctx.reply("（刚才去拍照啦，这会儿有点忙不过来，你再说一遍好不好~）").catch(() => {});
+      }
+    } finally {
+      if (cleanup) cleanup();
+      photoPending.delete(sid);
+    }
+  }
+
+  bot.use(session({ initial: (): BotSessionData => ({ voiceEnabled: true }) }));
 
   // 访问控制：仅允许主人 TG 账号。ALLOWED_TG_USER_ID 显式指定时以此为准；
   // 否则进入引导期，首位发送 /start 的用户自动注册为 owner，之后其余账号被拒。
@@ -922,6 +1107,8 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         return ctx.reply("没听清，能再发一次吗？");
       }
       await ctx.reply(`🎙 识别：${text}`);
+      // 语音转写文本同样走拍照触发词检测（修复：之前语音不会触发生图）
+      if (await tryPhotoTrigger(ctx, text)) return;
       try {
         const result = await runChatWithContext(ctx, text);
         await replyWithTextAndVoice(ctx, result.text, result.character);
@@ -935,7 +1122,13 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     } catch (err) {
       console.error("voice handling failed:", err);
       const msg = err instanceof Error ? err.message : String(err);
-      await ctx.reply(`语音处理失败：${msg.slice(0, 120)}`);
+      // 识别类错误给「没听清，请重试」；其它（如对话接口）给通用失败提示。
+      // 绝不把系统/接口报错原文回显给用户，也避免其被当作消息送进 LLM。
+      if (/识别|ASR|语音|MIMO|API_KEY|语音内容/.test(msg)) {
+        await ctx.reply("🎙 没听清，能再发一次吗？");
+      } else {
+        await ctx.reply("语音处理失败，请稍后再试。");
+      }
     } finally {
       if (oggPath) await fs.unlink(oggPath).catch(() => {});
     }
@@ -990,6 +1183,9 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         return ctx.reply(`已更新${field === "name" ? "名字" : field === "description" ? "描述" : "头像"}。`);
       }
 
+      // ---------- 拍照等待期拦截 + 触发词检测（文字/语音共用，见 tryPhotoTrigger）----------
+      if (await tryPhotoTrigger(ctx, text)) return;
+
       // 普通聊天
       try {
         const result = await runChatWithContext(ctx, text);
@@ -1003,15 +1199,23 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
       }
     } catch (err) {
       console.error("text handling failed:", err);
-      await ctx.reply("处理失败，请稍后再试。");
+      if (isNetworkError(err)) {
+        await ctx.reply("⚠️ 网络有点波动，回复没能发出去，请稍后再发一次～");
+      } else {
+        await ctx.reply("处理失败，请稍后再试。");
+      }
     }
   });
 }
+
+// 已启动的专属 bot 实例注册表，key 为角色 id，供主动推送调度器按角色发送。
+const characterBots = new Map<string, Bot<BotContext>>();
 
 export async function startTelegramBot(token: string, fixedCharacterId?: string): Promise<void> {
   if (!token) return;
   const bot = new Bot<BotContext>(token);
   registerBot(bot, token, fixedCharacterId);
+  if (fixedCharacterId) characterBots.set(fixedCharacterId, bot);
 
   const webhookUrl = process.env.TELEGRAM_WEBHOOK?.trim();
   if (webhookUrl) {
@@ -1028,4 +1232,26 @@ export async function startTelegramBot(token: string, fixedCharacterId?: string)
   await bot.start({
     onStart: (me) => console.log(`Telegram bot @${me.username} started (polling)`)
   });
+}
+
+// 主动推送：获取某角色已注册的专属 bot 实例。
+export function getCharacterBot(characterId: string): Bot<BotContext> | undefined {
+  return characterBots.get(characterId);
+}
+
+// 主动推送：让某角色专属 bot 给主人发一条消息（文本，可选带语音）。返回是否发送成功。
+export async function sendProactiveToOwner(character: DigitalHumanConfig, text: string): Promise<boolean> {
+  const bot = characterBots.get(character.id);
+  if (!bot) return false;
+  const ownerId = loadOwner();
+  if (ownerId == null) return false;
+  // 语音默认关闭，避免每条定时消息都消耗 MiMo TTS 额度；在角色「主动推送」设置里可开启。
+  const voiceEnabled = character.proactive?.voiceEnabled ?? false;
+  try {
+    await sendTextWithOptionalVoice(bot.api, ownerId, text, character, voiceEnabled);
+    return true;
+  } catch (err) {
+    console.error(`主动向主人推送失败 (${character.id}):`, err);
+    return false;
+  }
 }

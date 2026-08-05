@@ -1,6 +1,7 @@
 import "dotenv/config";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
 import express, { Response } from "express";
 import cors from "cors";
 
@@ -14,14 +15,17 @@ import {
   ChatRequestBody,
   ChatMessage,
   ChatResponse,
+  CharacterLocation,
   RelationshipMode,
   DigitalHumanConfig,
   EmotionProfile,
+  ProactiveConfig,
   SessionContext
 } from "./types";
 
 // 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
 import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize } from "./core/chat";
+import { markUserActivity } from "./core/activity";
 import {
   applyCharacterPatch,
   AUDIO_DIR,
@@ -52,7 +56,56 @@ import {
   writeHumanOverrides
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
-import { publicSystemConfig, saveSystemConfig, getLlmConfig, type SystemConfigInput } from "./core/config";
+import { startProactiveScheduler } from "./telegram/proactive";
+import { getUserMemory, saveUserMemory, deleteUserMemory } from "./services/userMemory";
+import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
+import { getPromptConfig } from "./core/prompts";
+import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
+import { getStatsOverview, resetCharacterStats, deleteCharacterStats, ensureBackfilled } from "./services/stats";
+
+// 规范化主动推送配置：限制最多 3 个时间点，模式只能是 always/smart。
+// 规范化主动推送配置：限制最多 3 个时间点，模式支持 always/smart/probability；
+// probability 模式下抽取全局概率与各时间点概率覆盖（1-100）。
+function normalizeProactive(input: unknown): ProactiveConfig | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const p = input as Record<string, unknown>;
+  const timePoints = Array.isArray(p.timePoints)
+    ? (p.timePoints as unknown[]).filter((t) => typeof t === "string").slice(0, 3).map(String)
+    : [];
+  const mode: ProactiveConfig["mode"] =
+    p.mode === "smart" ? "smart" : p.mode === "probability" ? "probability" : "always";
+  const result: ProactiveConfig = { enabled: Boolean(p.enabled), timePoints, mode };
+
+  if (typeof p.probability === "number" && p.probability > 0) {
+    result.probability = Math.min(100, Math.max(1, Math.round(p.probability)));
+  }
+  if (p.timePointProbabilities && typeof p.timePointProbabilities === "object") {
+    const tpp: Record<string, number> = {};
+    for (const [k, v] of Object.entries(p.timePointProbabilities as Record<string, unknown>)) {
+      const num = Number(v);
+      if (typeof k === "string" && /^\d{1,2}:\d{2}$/.test(k) && Number.isFinite(num) && num > 0) {
+        tpp[k] = Math.min(100, Math.max(1, Math.round(num)));
+      }
+    }
+    if (Object.keys(tpp).length) result.timePointProbabilities = tpp;
+  }
+  return result;
+}
+
+// 规范化数字人地理位置：province/city 非空且经纬度为合法数字才接受。
+function normalizeLocation(input: unknown): CharacterLocation | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const l = input as Record<string, unknown>;
+  const lat = Number(l.latitude);
+  const lon = Number(l.longitude);
+  if (!l.province || !l.city || !Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
+  return {
+    province: String(l.province).trim(),
+    city: String(l.city).trim(),
+    latitude: lat,
+    longitude: lon
+  };
+}
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
@@ -69,18 +122,69 @@ app.get("/api/digital-humans", async (_req, res) => {
   res.json({ humans: safe });
 });
 
+// ---------- 系统设置二次密码验证 ----------
+// 登录接口本身免鉴权（声明在中间件之前）；其余 /api/settings* 一律需要 x-settings-token
+app.post("/api/settings/auth", settingsAuthLogin);
+// 首次初始化接口也免鉴权（声明在中间件之前），仅当设置密码尚未设置时可用
+app.post("/api/settings/auth/init", settingsAuthInit);
+app.use("/api/settings", requireSettingsAuth);
+app.post("/api/settings/auth/logout", settingsAuthLogout);
+app.post("/api/settings/auth/password", settingsAuthChangePassword);
+
 // ---------- 系统设置（可扩展：后续菜单/配置项统一挂载到 GET /api/settings） ----------
 app.get("/api/settings", (_req, res) => {
-  res.json(publicSystemConfig());
+  const base = publicSystemConfig();
+  res.json({ ...base, prompts: getPromptConfig() });
 });
 
 app.put("/api/settings", (req, res) => {
   const body = (req.body || {}) as SystemConfigInput;
   try {
-    saveSystemConfig({ llm: body.llm, tts: body.tts });
-    res.json(publicSystemConfig());
+    saveSystemConfig({ llm: body.llm, tts: body.tts, runningHub: body.runningHub, prompts: body.prompts });
+    res.json({ ...publicSystemConfig(), prompts: getPromptConfig() });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "保存设置失败" });
+  }
+});
+
+app.post("/api/settings/prompts/reset", (_req, res) => {
+  try {
+    resetPrompts();
+    res.json({ ...publicSystemConfig(), prompts: getPromptConfig() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "重置提示词失败" });
+  }
+});
+
+// ---------- 聊天统计（与 /api/settings 同鉴权：需设置密码令牌） ----------
+// 统计读接口对设置页开放；重置/删除为写操作，同样需令牌。
+app.get("/api/settings/stats/overview", (_req, res) => {
+  try {
+    res.json(getStatsOverview());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "统计读取失败" });
+  }
+});
+
+app.post("/api/settings/stats/reset/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "digital human id is required" });
+  try {
+    resetCharacterStats(id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "重置统计失败" });
+  }
+});
+
+app.delete("/api/settings/stats/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "digital human id is required" });
+  try {
+    deleteCharacterStats(id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "删除统计失败" });
   }
 });
 
@@ -110,6 +214,24 @@ app.post("/api/settings/llm/models", async (req, res) => {
   }
 });
 
+
+// 重启后端服务（如修改数字人 Telegram 专属 bot token 后需重启才能生效）。
+// 先向客户端回包，再以 detached 方式延迟执行重启，避免进程被杀前响应未送达、
+// 以及重启命令随进程退出而中断。服务名可经 env DG_SERVICE_NAME 覆盖。
+const DG_SERVICE_NAME = process.env.DG_SERVICE_NAME || "digital-girlfriend";
+app.post("/api/settings/restart-service", (_req, res) => {
+  if (!/^[a-zA-Z0-9_-]+$/.test(DG_SERVICE_NAME)) {
+    return res.status(500).json({ error: "服务名配置非法" });
+  }
+  res.json({ ok: true, message: `已下发重启指令，服务「${DG_SERVICE_NAME}」将在数秒后重启` });
+  setTimeout(() => {
+    try {
+      spawn("sudo", ["systemctl", "restart", DG_SERVICE_NAME], { detached: true, stdio: "ignore" }).unref();
+    } catch (err) {
+      console.error("重启服务失败:", err);
+    }
+  }, 800);
+});
 
 app.post("/api/models/upload", async (req, res) => {
   try {
@@ -191,7 +313,10 @@ app.post("/api/digital-humans", async (req, res) => {
       avatarVideoProfile,
       personalityTagline,
       relationshipMode,
-      telegramBotToken
+      telegramBotToken,
+      chatTaboos,
+      proactive,
+      location
     } = req.body as {
       name?: string;
       description?: string;
@@ -211,6 +336,7 @@ app.post("/api/digital-humans", async (req, res) => {
       personalityTagline?: string;
       relationshipMode?: DigitalHumanConfig["relationshipMode"];
       telegramBotToken?: string;
+      location?: unknown;
     };
 
     if (!name || !description || !avatarUrl || !voice) {
@@ -241,7 +367,10 @@ app.post("/api/digital-humans", async (req, res) => {
       },
       relationshipMode: ensureRelationshipMode(relationshipMode),
       defaultMood: ensureSupportedMood(defaultMood),
-      telegramBotToken: telegramBotToken?.trim() || undefined
+      telegramBotToken: telegramBotToken?.trim() || undefined,
+      chatTaboos: chatTaboos?.trim() || undefined,
+      proactive: normalizeProactive(proactive),
+      location: normalizeLocation(location)
     };
     customs.push(created);
     await writeCustomHumans(customs);
@@ -274,7 +403,18 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
       const t = body.telegramBotToken.trim();
       patch.telegramBotToken = t ? t : undefined;
     }
+    if (typeof body.chatTaboos === "string") {
+      patch.chatTaboos = body.chatTaboos.trim() || undefined;
+    }
+    if (body.proactive && typeof body.proactive === "object") {
+      patch.proactive = normalizeProactive(body.proactive);
+    }
     if (body.avatarType !== undefined) patch.avatarType = normalizeAvatarType(body.avatarType);
+    // location：配置了合法地理位置才更新；传空对象/非法则不修改，避免写入脏数据
+    if (body.location && typeof body.location === "object") {
+      const loc = normalizeLocation(body.location);
+      if (loc) patch.location = loc;
+    }
 
     const voice = typeof body.voice === "string" ? body.voice.trim() : "";
     const voiceProvider = body.voiceProvider;
@@ -314,6 +454,40 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
   }
 });
 
+// 长期记忆（用户与某数字人的关系/记忆资料）——后端唯一真源，跨浏览器/TG 一致。
+app.get("/api/user-memory/:characterId", async (req, res) => {
+  const characterId = String(req.params.characterId || "").trim();
+  if (!characterId) return res.status(400).json({ error: "characterId required" });
+  const memory = await getUserMemory(characterId);
+  res.json({ memory });
+});
+
+app.put("/api/user-memory/:characterId", async (req, res) => {
+  try {
+    const characterId = String(req.params.characterId || "").trim();
+    if (!characterId) return res.status(400).json({ error: "characterId required" });
+    const payload = (req.body && (req.body as Record<string, unknown>).memory) || req.body || {};
+    const saved = await saveUserMemory(characterId, payload as never);
+    res.json({ memory: saved });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "save user memory failed" });
+  }
+});
+
+// 清除某数字人的长期记忆文件（后端唯一真源）。聊天会话的 AI 记忆档案随会话文件一并清除。
+app.delete("/api/user-memory/:characterId", async (req, res) => {
+  try {
+    const characterId = String(req.params.characterId || "").trim();
+    if (!characterId) return res.status(400).json({ error: "characterId required" });
+    await deleteUserMemory(characterId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "delete user memory failed" });
+  }
+});
+
 app.post("/api/chat", async (req, res) => {
   try {
     const body = req.body as ChatRequestBody;
@@ -326,6 +500,7 @@ app.post("/api/chat", async (req, res) => {
       sessionId: body.sessionId,
       message,
       characterId: body.characterId,
+      channel: "web",
       relationshipMode: normalizeRelationshipMode(body.relationshipMode)
     });
 
@@ -413,6 +588,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     writeSse(res, "meta", { sessionId, characterId: character.id });
     await appendToSession(sessionId, { role: "user", content: message });
+    markUserActivity(character.id); // 用户主动发消息 → 标记活跃，抑制主动推送
 
     let assistantText = "";
     const onChunk = (chunk: StreamChunk) => {
@@ -557,6 +733,9 @@ app.delete("/api/digital-humans/:id", async (req, res) => {
     return res.status(400).json({ error: "至少保留一个数字人，不能全部删除" });
   }
 
+  // 删除整个数字人时，连带清除其聊天统计（累加器条目一并移除）
+  deleteCharacterStats(characterId);
+
   const deleted = await deleteCustomHumanById(characterId);
   if (deleted) {
     return res.json({ ok: true });
@@ -608,7 +787,7 @@ app.get("/", (_req, res) => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>数字女友 - API 服务提示页</title>
+    <title>AI伴聊 - API 服务提示页</title>
     <style>
       body {
         margin: 0;
@@ -721,3 +900,11 @@ function launchTelegramBots(): void {
     .catch((err) => console.error("加载数字人失败，无法启动专属 bot:", err));
 }
 launchTelegramBots();
+startProactiveScheduler();
+
+// 首启从历史会话 best-effort 回填聊天统计（仅执行一次，幂等）
+try {
+  ensureBackfilled();
+} catch (err) {
+  console.error("[stats] 启动回填失败（不影响服务）：", err instanceof Error ? err.message : err);
+}

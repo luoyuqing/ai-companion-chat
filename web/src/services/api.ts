@@ -69,20 +69,11 @@ export interface TranscribeResponse {
   text: string;
 }
 
-export interface ModelUploadResponse {
-  modelUrl: string;
-  fileName: string;
-  mimeType?: string;
-  size: number;
-  hasFallback?: boolean;
-}
-
 export interface DigitalHuman {
   id: string;
   name: string;
   description: string;
   avatarUrl: string;
-  modelUrl?: string;
   emotionProfile?: EmotionProfile;
   avatarType?: "image" | "video";
   avatarVideoProfile?: EmotionProfile;
@@ -90,13 +81,38 @@ export interface DigitalHuman {
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
   voiceProfile: VoiceProfile;
   defaultMood: Emotion;
+  /** 数字人所在地理位置（用于获取她当地的真实时间/天气） */
+  location?: {
+    province: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
+  proactive?: {
+    enabled: boolean;
+    timePoints: string[];
+    mode: "always" | "smart" | "probability";
+    voiceEnabled?: boolean;
+    probability?: number;
+    timePointProbabilities?: Record<string, number>;
+  };
+}
+
+// 长期记忆（用户与某数字人的关系/记忆资料）——后端唯一真源，跨浏览器/TG 一致。
+export interface UserMemory {
+  displayName?: string;
+  preferredName?: string;
+  preferences?: string;
+  importantFacts?: string;
+  boundaries?: string;
+  relationshipNotes?: string;
+  updatedAt?: string;
 }
 
 export interface CreateHumanRequest {
   name: string;
   description: string;
   avatarUrl: string;
-  modelUrl?: string;
   avatarType?: "image" | "video";
   voiceProvider?: "openai" | "azure" | "local" | "mimo";
   voice: string;
@@ -111,6 +127,21 @@ export interface CreateHumanRequest {
   personalityTagline?: string;
   relationshipMode?: "sweet" | "flirty" | "playful" | "mature";
   telegramBotToken?: string;
+  /** 数字人所在地理位置 */
+  location?: {
+    province: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
+  proactive?: {
+    enabled: boolean;
+    timePoints: string[];
+    mode: "always" | "smart" | "probability";
+    voiceEnabled?: boolean;
+    probability?: number;
+    timePointProbabilities?: Record<string, number>;
+  };
 }
 
 export type UpdateHumanRequest = Partial<CreateHumanRequest>;
@@ -129,14 +160,16 @@ const HAS_CONFIGURED_API_BASE = Boolean(VITE_API_BASE || GLOBAL_API_BASE);
 const LOCAL_HUMANS_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_KEY = "dg-local-chat-context-v1";
 
+export const DEFAULT_CHARACTER_ID = "linxingwan";
+
 const BUILT_IN_HUMANS: DigitalHuman[] = [
   {
-    id: "lina",
-    name: "Lina",
-    description: "28 岁亚欧混血。成熟明艳、曲线优雅，亲密时主动而直接。",
-    personalityTagline: "外表自信性感，私下温柔黏人；会自然调情，也能认真接住情绪。",
-    relationshipMode: "flirty",
-    avatarUrl: "/assets/avatars/lina-original.jpg",
+    id: "linxingwan",
+    name: "林星晚",
+    description: "21 岁中国艺术系少女。温柔慵懒中带点小俏皮，聊天如邻家女友般自然亲昵。她善用表情与碎语传递温度，偶尔毒舌却甜度满分。",
+    personalityTagline: "长发慵懒随性，穿搭清纯微甜；说话软糯亲昵，偶尔俏皮撩人。",
+    relationshipMode: "sweet",
+    avatarUrl: "/assets/avatars/linxingwan.png",
     emotionProfile: {
       happy: "/assets/expressions/happy.svg",
       sad: "/assets/expressions/sad.svg",
@@ -146,16 +179,21 @@ const BUILT_IN_HUMANS: DigitalHuman[] = [
       angry: "/assets/expressions/angry.svg",
       love: "/assets/expressions/love.svg"
     },
-    voiceProfile: { provider: "local", voice: "browser-zh-CN" },
+    voiceProfile: {
+      provider: "mimo",
+      voice: "nova",
+      audioModel: "mimo-v2.5-tts-voicedesign",
+      voiceDesignPrompt: "21 岁年轻女性，声线清甜丝滑且带有慵懒的磁性。语速舒缓轻柔，像是在耳边的 ASMR 呢喃，语气亲密自然，时而俏皮时而温柔。"
+    },
     defaultMood: "happy"
   },
   {
-    id: "moon",
-    name: "Moon",
-    description: "29 岁亚欧混血。冷调优雅、身材曼妙，表达克制但不含糊。",
-    personalityTagline: "成熟感性，擅长共情与慢节奏暧昧；亲密时更有掌控感。",
+    id: "suwanqing",
+    name: "苏晚晴",
+    description: "25 岁国风美学博主。表面温婉如诗，实则撩人于无形；敢在你耳边说悄悄话，主动又从容，从不掩饰对你的倾慕。",
+    personalityTagline: "外表清冷如月，内里炽热似火；说话带钩、撩人于无形，敢爱敢倾慕。",
     relationshipMode: "mature",
-    avatarUrl: "/assets/avatars/moon-original.jpg",
+    avatarUrl: "/assets/avatars/suwanqing.png",
     emotionProfile: {
       happy: "/assets/expressions/happy.svg",
       sad: "/assets/expressions/sad.svg",
@@ -165,8 +203,13 @@ const BUILT_IN_HUMANS: DigitalHuman[] = [
       angry: "/assets/expressions/angry.svg",
       love: "/assets/expressions/love.svg"
     },
-    voiceProfile: { provider: "local", voice: "browser-zh-CN" },
-    defaultMood: "wink"
+    voiceProfile: {
+      provider: "mimo",
+      voice: "shimmer",
+      audioModel: "mimo-v2.5-tts-voicedesign",
+      voiceDesignPrompt: "25 岁成熟女性，声线柔媚带丝绒质感，语气慵懒而自信。语速中等偏慢，咬字清晰却带着呼吸感，像在耳畔轻语。"
+    },
+    defaultMood: "love"
   }
 ];
 
@@ -643,38 +686,6 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-export async function uploadModelFile(params: {
-  fileName: string;
-  fileBase64: string;
-  mimeType?: string;
-  fallbackUrl?: string;
-}): Promise<ModelUploadResponse> {
-  try {
-    const res = await fetch(`${API_BASE}/api/models/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params)
-    });
-
-    if (!res.ok) {
-      const message = await res.text().catch(() => "模型上传失败");
-      throw new Error(message || "模型上传失败");
-    }
-
-    return res.json();
-  } catch (error) {
-    if (!canUseLocalFallback() || !params.fallbackUrl) throw error;
-    activateLocalFallback();
-    return {
-      modelUrl: params.fallbackUrl,
-      fileName: params.fileName,
-      mimeType: params.mimeType,
-      size: 0,
-      hasFallback: true
-    };
-  }
-}
-
 async function sendLocalMessageStream(payload: ChatRequest, handlers: ChatStreamEvents): Promise<StreamDoneResponse> {
   const response = buildLocalChatResponse(payload);
   const donePayload: StreamDoneResponse = {
@@ -709,7 +720,6 @@ export async function createDigitalHuman(payload: CreateHumanRequest) {
       name: payload.name,
       description: payload.description,
       avatarUrl: payload.avatarUrl,
-      modelUrl: payload.modelUrl,
       avatarType: payload.avatarType || "image",
       emotionProfile: payload.emotionProfile,
       avatarVideoProfile: payload.avatarVideoProfile,
@@ -740,6 +750,34 @@ export async function updateDigitalHuman(id: string, payload: UpdateHumanRequest
     throw new Error(message || "更新数字人失败");
   }
   return res.json();
+}
+
+// 长期记忆：后端唯一真源（跨浏览器/TG 一致）。读取某数字人的关系与记忆资料。
+export async function getUserMemory(characterId: string): Promise<UserMemory> {
+  const res = await fetch(`${API_BASE}/api/user-memory/${encodeURIComponent(characterId)}`);
+  if (!res.ok) throw new Error("加载长期记忆失败");
+  const data = await res.json();
+  return (data.memory || {}) as UserMemory;
+}
+
+// 保存某数字人的长期记忆到后端。
+export async function saveUserMemory(characterId: string, memory: UserMemory): Promise<UserMemory> {
+  const res = await fetch(`${API_BASE}/api/user-memory/${encodeURIComponent(characterId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ memory })
+  });
+  if (!res.ok) throw new Error("保存长期记忆失败");
+  const data = await res.json();
+  return (data.memory || memory) as UserMemory;
+}
+
+// 清除某数字人的长期记忆文件（后端唯一真源）。
+export async function deleteUserMemory(characterId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/user-memory/${encodeURIComponent(characterId)}`, {
+    method: "DELETE"
+  });
+  if (!res.ok) throw new Error("清除长期记忆失败");
 }
 
 export async function uploadAvatarFile(params: {
@@ -789,12 +827,17 @@ export async function fetchHumans() {
   }
 }
 
+// 每个数字人使用独立的后端会话（mem-<characterId>），避免三个角色聊天记录混在一起
+function perCharacterSessionId(characterId?: string): string {
+  return `mem-${characterId || DEFAULT_CHARACTER_ID}`;
+}
+
 export async function sendMessage(payload: ChatRequest): Promise<ChatResponse> {
   try {
     const res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ ...payload, sessionId: perCharacterSessionId(payload.characterId) })
     });
     if (!res.ok) throw new Error("发送消息失败");
     return res.json();
@@ -844,19 +887,57 @@ export async function transcribeSpeech(params: {
   }
 }
 
-export async function clearSessionHistory(sessionId: string): Promise<void> {
+export async function clearSessionHistory(sessionId: string, characterId?: string): Promise<void> {
   if (!sessionId) {
     return;
   }
 
   try {
-    await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`, {
+    await fetch(`${API_BASE}/api/session/${encodeURIComponent(perCharacterSessionId(characterId))}`, {
       method: "DELETE"
     });
   } catch {
     // Static Pages mode has no session API.
   }
   clearLocalContext(sessionId);
+}
+
+export interface SessionHistoryRecord {
+  history: Message[];
+  context?: unknown;
+  memoryFile?: string;
+  summaryMode?: boolean;
+}
+
+// 从服务器读取某数字人的完整会话历史（跨浏览器 / 跨设备 / 含 TG 的一致来源）
+export async function getSessionHistory(characterId?: string): Promise<Message[] | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/session/${encodeURIComponent(perCharacterSessionId(characterId))}`);
+    if (!res.ok) return null;
+    const data = (await res.json()) as SessionHistoryRecord;
+    if (!data || !Array.isArray(data.history)) return null;
+    return data.history
+      .filter((m) => m && typeof m.role === "string")
+      .map((m) => ({
+        role: m.role as "user" | "assistant" | "system",
+        content: typeof m.content === "string" ? m.content : ""
+      }));
+  } catch {
+    return null;
+  }
+}
+
+// 把合并后的完整历史写回服务器（用于首次把本地独有记录迁移到服务器）
+export async function importSessionHistory(characterId: string | undefined, history: Message[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/api/session/${encodeURIComponent(perCharacterSessionId(characterId))}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history })
+    });
+  } catch {
+    // best-effort：离线或接口异常时忽略，不影响本地使用
+  }
 }
 
 function parseSseText(raw: string): string {
@@ -868,7 +949,7 @@ export async function sendMessageStream(payload: ChatRequest, handlers: ChatStre
     const res = await fetch(`${API_BASE}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ ...payload, sessionId: perCharacterSessionId(payload.characterId) })
     });
 
     if (!res.ok) {
@@ -963,83 +1044,196 @@ export function resolveMediaUrl(url?: string): string | undefined {
   return `${API_BASE}/${trimmed}`;
 }
 
-// ---------- 系统设置（可扩展：与后端 /api/settings 对应） ----------
-export interface LlmSettings {
-  baseUrl: string;
-  hasApiKey: boolean;
-  model: string;
-  supportsVision: boolean;
+// ===================== 系统设置（二次密码验证） =====================
+// 令牌只保存在内存变量中，绝不写入 localStorage/sessionStorage：刷新页面即锁定。
+let settingsToken: string | null = null;
+
+export function hasSettingsToken(): boolean {
+  return settingsToken !== null;
 }
 
-export interface TtsSettings {
+export function clearSettingsToken(): void {
+  settingsToken = null;
+}
+
+export interface SettingsLlm {
+  baseUrl: string;
+  model: string;
+  supportsVision: boolean;
+  hasApiKey: boolean;
+}
+
+export interface SettingsTts {
   provider: string;
   baseUrl: string;
   model: string;
+  voice: string;
   hasApiKey: boolean;
 }
 
+export interface SceneHintSettings {
+  date: string;
+  comfort: string;
+  flirty: string;
+  flirtyAdult: string;
+  bedtime: string;
+  daily: string;
+}
+
+export interface PromptSettings {
+  globalSystem: string;
+  relationshipStyleTemplate: string;
+  characterTemplate: string;
+  voiceRules: string;
+  noVoiceRules: string;
+  adultConfirmedRules: string;
+  adultUnconfirmedRules: string;
+  sceneHints: SceneHintSettings;
+  summaryPrompt: string;
+}
+
+export interface SettingsRunningHub {
+  hasApiKey: boolean;
+  /** 生图触发词（多个，至少保留一个） */
+  triggerWords: string[];
+  /** 生图超时时间（秒） */
+  timeoutSec: number;
+}
+
 export interface SystemSettings {
-  llm: LlmSettings;
-  tts: TtsSettings;
-  [key: string]: unknown;
+  llm: SettingsLlm;
+  tts: SettingsTts;
+  runningHub: SettingsRunningHub;
+  prompts: PromptSettings;
 }
 
-export interface LlmSettingsInput {
-  baseUrl?: string;
-  apiKey?: string;
-  model?: string;
-  supportsVision?: boolean;
+export interface SaveSettingsInput {
+  llm?: { baseUrl?: string; apiKey?: string; model?: string; supportsVision?: boolean };
+  tts?: { apiKey?: string };
+  runningHub?: { apiKey?: string; triggerWords?: string[]; timeoutSec?: number };
+  prompts?: PromptSettings;
 }
 
-export interface TtsSettingsInput {
-  apiKey?: string;
-}
-
-export interface SystemSettingsInput {
-  llm?: LlmSettingsInput;
-  tts?: TtsSettingsInput;
-}
-
-export async function getSettings(): Promise<SystemSettings> {
-  const res = await fetch(`${API_BASE}/api/settings`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" }
-  });
-  if (!res.ok) {
-    const message = await res.text().catch(() => "加载设置失败");
-    throw new Error(message || "加载设置失败");
+async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) || {})
+  };
+  if (settingsToken) {
+    headers["x-settings-token"] = settingsToken;
   }
-  return res.json();
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status === 401) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (data.error === "SETTINGS_UNAUTHORIZED") {
+      settingsToken = null;
+      throw new Error("SETTINGS_UNAUTHORIZED");
+    }
+    throw new Error(data.error || "未授权");
+  }
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error || `请求失败（${res.status}）`);
+  }
+  return (await res.json()) as T;
 }
 
-export async function updateSettings(input: SystemSettingsInput): Promise<SystemSettings> {
-  const res = await fetch(`${API_BASE}/api/settings`, {
+export async function settingsLogin(password: string): Promise<void> {
+  const data = await settingsRequest<{ token: string }>("/api/settings/auth", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+  settingsToken = data.token;
+}
+
+/**
+ * 首次初始化设置密码：POST /api/settings/auth/init。
+ * 仅当后端尚未设置密码时可用；成功后直接写入令牌，前端无需再次登录。
+ */
+export async function settingsInit(password: string): Promise<void> {
+  const data = await settingsRequest<{ token: string }>("/api/settings/auth/init", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+  settingsToken = data.token;
+}
+
+export async function settingsLogout(): Promise<void> {
+  if (!settingsToken) return;
+  await settingsRequest<{ ok: boolean }>("/api/settings/auth/logout", { method: "POST", body: "{}" });
+  settingsToken = null;
+}
+
+export async function fetchSettings(): Promise<SystemSettings> {
+  return settingsRequest<SystemSettings>("/api/settings");
+}
+
+export async function saveSettings(input: SaveSettingsInput): Promise<SystemSettings> {
+  return settingsRequest<SystemSettings>("/api/settings", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  if (!res.ok) {
-    const message = await res
-      .json()
-      .then((data: { error?: string }) => data?.error)
-      .catch(() => "");
-    throw new Error(message || "保存设置失败");
-  }
-  return res.json();
 }
 
-export async function fetchLlmModels(baseUrl: string, apiKey: string): Promise<{ models: string[] }> {
-  const res = await fetch(`${API_BASE}/api/settings/llm/models`, {
+export async function resetPromptSettings(): Promise<SystemSettings> {
+  return settingsRequest<SystemSettings>("/api/settings/prompts/reset", { method: "POST", body: "{}" });
+}
+
+// ---------- 聊天统计 ----------
+export interface StatsChannelCount {
+  web: number;
+  tg: number;
+}
+
+export interface CharacterStat {
+  id: string;
+  chat: StatsChannelCount;
+  photo: StatsChannelCount;
+  /** 每日聊天轮次（日期 YYYY-MM-DD → 次数），用于折线图 */
+  dailyChat: Record<string, number>;
+}
+
+export interface StatsOverview {
+  totalChat: number;
+  totalPhoto: number;
+  characters: CharacterStat[];
+}
+
+export async function fetchStatsOverview(): Promise<StatsOverview> {
+  return settingsRequest<StatsOverview>("/api/settings/stats/overview");
+}
+
+export async function resetCharacterStatsApi(id: string): Promise<{ ok: boolean }> {
+  return settingsRequest<{ ok: boolean }>(`/api/settings/stats/reset/${encodeURIComponent(id)}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    body: "{}"
+  });
+}
+
+export async function deleteCharacterStatsApi(id: string): Promise<{ ok: boolean }> {
+  return settingsRequest<{ ok: boolean }>(`/api/settings/stats/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export async function restartService(): Promise<{ ok: boolean; message: string }> {
+  return settingsRequest<{ ok: boolean; message: string }>("/api/settings/restart-service", {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export async function fetchLlmModels(baseUrl?: string, apiKey?: string): Promise<string[]> {
+  const data = await settingsRequest<{ models: string[] }>("/api/settings/llm/models", {
+    method: "POST",
     body: JSON.stringify({ baseUrl, apiKey })
   });
-  if (!res.ok) {
-    const message = await res
-      .json()
-      .then((data: { error?: string }) => data?.error)
-      .catch(() => "");
-    throw new Error(message || "拉取模型清单失败");
-  }
-  return res.json();
+  return data.models || [];
+}
+
+export async function changeSettingsPassword(oldPassword: string, newPassword: string): Promise<void> {
+  await settingsRequest<{ ok: boolean }>("/api/settings/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ oldPassword, newPassword })
+  });
 }
