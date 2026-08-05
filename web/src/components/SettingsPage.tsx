@@ -743,11 +743,13 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
       ? ""
       : `${linePath} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
 
-  // 仅在两端与中点显示日期标签，避免拥挤
-  const labelIdx = n <= 1 ? [0] : [0, Math.floor((n - 1) / 2), n - 1].filter((v, idx, arr) => arr.indexOf(v) === idx);
+  // 刻度：近 7 天显示每天，其余均匀取约 7 个，避免拥挤
+  const tickCount = n <= 8 ? n : 7;
+  const labelIdx =
+    n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
 
   return (
-    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="每日聊天折线图">
+    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日聊天折线图">
       {/* 基准网格线 */}
       <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" />
       <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" />
@@ -921,7 +923,10 @@ function StatsTab({
                     disabled={busy || totalChat === 0}
                     onClick={() => setConfirmResetId(row.id)}
                   >
-                    ↺
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                      <polyline points="21 3 21 9 15 9" />
+                    </svg>
                   </button>
                 </div>
                 <div className="stats-card-metrics">
