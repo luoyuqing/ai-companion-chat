@@ -723,22 +723,25 @@ function buildSeries(dailyChat: Record<string, number>, range: StatsRange): Arra
 
 function StatsChart({ series }: { series: Array<{ date: string; count: number }> }) {
   const W = 600;
-  const H = 160;
-  const padL = 28;
-  const padR = 12;
-  const padT = 12;
-  const padB = 24;
+  const H = 170;
+  const padL = 30;
+  const padR = 14;
+  const padT = 14;
+  const padB = 30;
   const n = series.length;
   const maxCount = Math.max(1, ...series.map((s) => s.count));
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
   const xAt = (i: number) => (n <= 1 ? padL + plotW / 2 : padL + (plotW * i) / (n - 1));
   const yAt = (c: number) => padT + plotH - (c / maxCount) * plotH;
-  const points = series.map((s, i) => `${xAt(i).toFixed(1)},${yAt(s.count).toFixed(1)}`).join(" ");
   const linePath =
     n <= 1
       ? ""
       : series.map((s, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(s.count).toFixed(1)}`).join(" ");
+  const areaPath =
+    n <= 1
+      ? ""
+      : `${linePath} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
 
   // 仅在两端与中点显示日期标签，避免拥挤
   const labelIdx = n <= 1 ? [0] : [0, Math.floor((n - 1) / 2), n - 1].filter((v, idx, arr) => arr.indexOf(v) === idx);
@@ -748,20 +751,30 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
       {/* 基准网格线 */}
       <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" />
       <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" />
-      {/* 面积+折线 */}
+      {/* 面积填充 + 折线 */}
+      {areaPath ? <path d={areaPath} className="stats-area" /> : null}
       {linePath ? <path d={linePath} className="stats-line" fill="none" /> : null}
       {series.map((s, i) => (
-        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.5 : 3} className="stats-dot" />
+        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.2 : 2.4} className="stats-dot" />
       ))}
       {/* Y 轴峰值标注 */}
-      <text x={padL} y={padT + 4} className="stats-axis">{maxCount}</text>
+      <text x={padL} y={padT + 2} className="stats-axis stats-axis-y">{maxCount}</text>
       {/* X 轴日期 */}
       {labelIdx.map((i) => (
-        <text key={i} x={xAt(i)} y={H - 6} className="stats-axis" textAnchor="middle">
+        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
           {series[i].date.slice(5)}
         </text>
       ))}
     </svg>
+  );
+}
+
+function StatsLegend() {
+  return (
+    <div className="stats-legend">
+      <span className="stats-legend-dot" />
+      每日对话轮次
+    </div>
   );
 }
 
@@ -812,6 +825,15 @@ function StatsTab({
   });
   rows.sort((a, b) => b.chat.tg - a.chat.tg || b.chat.web - a.chat.web);
 
+  // 全部角色每日聊天合并（总览趋势图）
+  const overviewDaily: Record<string, number> = {};
+  for (const row of rows) {
+    for (const date of Object.keys(row.dailyChat)) {
+      overviewDaily[date] = (overviewDaily[date] || 0) + row.dailyChat[date];
+    }
+  }
+  const overviewSeries = buildSeries(overviewDaily, range);
+
   async function doReset(id: string) {
     setBusy(true);
     try {
@@ -834,12 +856,31 @@ function StatsTab({
           <div className="stats-overview-card">
             <div className="stats-overview-num">{stats ? stats.totalChat : "—"}</div>
             <div className="stats-overview-label">总对话轮次</div>
+            {stats ? (
+              <div className="stats-overview-split">
+                网页 {stats.characters.reduce((a, c) => a + c.chat.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.chat.tg, 0)}
+              </div>
+            ) : null}
           </div>
           <div className="stats-overview-card">
             <div className="stats-overview-num">{stats ? stats.totalPhoto : "—"}</div>
             <div className="stats-overview-label">总生图次数</div>
+            {stats ? (
+              <div className="stats-overview-split">
+                网页 {stats.characters.reduce((a, c) => a + c.photo.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.photo.tg, 0)}
+              </div>
+            ) : null}
           </div>
         </div>
+        {stats ? (
+          <div className="stats-overview-chart">
+            <div className="stats-legend">
+              <span className="stats-legend-dot" />
+              全部角色每日对话（{range === "7" ? "近 7 天" : range === "30" ? "近 30 天" : "全部"}）
+            </div>
+            <StatsChart series={overviewSeries} />
+          </div>
+        ) : null}
         <p className="settings-lock-tip">
           统计按「消息轮次」累计（每发一条消息 +1），生图仅 Telegram 端支持。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
         </p>
@@ -868,8 +909,20 @@ function StatsTab({
             return (
               <div className={`stats-card ${expanded ? "expanded" : ""}`} key={row.id}>
                 <div className="stats-card-head">
-                  {row.avatarUrl ? <img src={row.avatarUrl} alt={row.name} className="stats-card-avatar" /> : null}
-                  <div className="stats-card-name">{row.name}</div>
+                  <div className="stats-card-id">
+                    {row.avatarUrl ? <img src={row.avatarUrl} alt={row.name} className="stats-card-avatar" /> : null}
+                    <div className="stats-card-name">{row.name}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="stats-reset-icon"
+                    title="重置该数字人的统计"
+                    aria-label="重置统计"
+                    disabled={busy || totalChat === 0}
+                    onClick={() => setConfirmResetId(row.id)}
+                  >
+                    ↺
+                  </button>
                 </div>
                 <div className="stats-card-metrics">
                   <span>对话 <b>{totalChat}</b></span>
@@ -880,13 +933,15 @@ function StatsTab({
                   <button type="button" className="ghost-btn" disabled={busy} onClick={() => setExpandedId(expanded ? null : row.id)}>
                     {expanded ? "收起趋势" : "查看趋势"}
                   </button>
-                  <button type="button" className="ghost-btn danger" disabled={busy || totalChat === 0} onClick={() => setConfirmResetId(row.id)}>
-                    重置统计
-                  </button>
                 </div>
                 {expanded ? (
                   <div className="stats-card-chart">
-                    {hasData ? <StatsChart series={series} /> : <p className="stats-empty">该区间暂无聊天数据</p>}
+                    {hasData ? (
+                      <>
+                        <StatsLegend />
+                        <StatsChart series={series} />
+                      </>
+                    ) : <p className="stats-empty">该区间暂无聊天数据</p>}
                   </div>
                 ) : null}
               </div>
