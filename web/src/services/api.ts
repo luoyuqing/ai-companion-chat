@@ -1185,17 +1185,31 @@ export interface StatsChannelCount {
   tg: number;
 }
 
+export interface TokenCount {
+  input: number;
+  output: number;
+}
+
 export interface CharacterStat {
   id: string;
   chat: StatsChannelCount;
   photo: StatsChannelCount;
   /** 每日聊天轮次（日期 YYYY-MM-DD → 次数），用于折线图 */
   dailyChat: Record<string, number>;
+  /** LLM token 消耗（输入/输出） */
+  tokens: TokenCount;
+  /** LLM API 请求次数，分渠道 */
+  apiCalls: StatsChannelCount;
+  /** 每日 LLM token 消耗（日期 YYYY-MM-DD → {input,output}），用于折线图 */
+  dailyToken: Record<string, TokenCount>;
 }
 
 export interface StatsOverview {
   totalChat: number;
   totalPhoto: number;
+  totalTokenInput: number;
+  totalTokenOutput: number;
+  totalApi: number;
   characters: CharacterStat[];
 }
 

@@ -6,7 +6,7 @@ import {
   makeSessionId,
   updateSessionMeta
 } from "../services/session";
-import { recordChat } from "../services/stats";
+import { recordChat, recordToken, recordApiCall } from "../services/stats";
 import { getUserMemory, saveUserMemory, formatUserMemorySystemContent } from "../services/userMemory";
 import { getCharacters, resolveCharacter } from "./data";
 import { markUserActivity } from "./activity";
@@ -214,6 +214,9 @@ export async function runChat(opts: {
   markUserActivity(character.id); // 用户主动发消息 → 标记活跃，抑制主动推送
   const saved = await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
   recordChat(character.id, opts.channel ?? "web"); // 统计：每轮 user 消息 +1（分渠道）
+  // 统计：LLM token 消耗与 API 请求次数（仅真实 LLM 请求计入，本地兜底不计入）
+  if (answer.calledApi) recordApiCall(character.id, opts.channel ?? "web");
+  if (answer.usage) recordToken(character.id, opts.channel ?? "web", answer.usage.promptTokens, answer.usage.completionTokens);
 
   // 总结模式：回合结束后按需重新生成记忆档案（记忆随对话持续压缩更新）
   if (summaryMode) {

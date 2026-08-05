@@ -23,6 +23,11 @@ export interface ChannelCount {
   tg: number;
 }
 
+export interface TokenCount {
+  input: number;
+  output: number;
+}
+
 export interface CharacterStat {
   /** 聊天轮次（按 user 消息计），分渠道 */
   chat: ChannelCount;
@@ -30,6 +35,12 @@ export interface CharacterStat {
   photo: ChannelCount;
   /** 每日聊天轮次（按 Asia/Shanghai 日期 YYYY-MM-DD 为键），用于折线图 */
   dailyChat: Record<string, number>;
+  /** LLM token 消耗（仅聊天每轮 1 次 LLM 请求），分输入/输出，不回填历史 */
+  tokens: TokenCount;
+  /** LLM API 请求次数（每轮 1 次），分渠道 */
+  apiCalls: ChannelCount;
+  /** 每日 LLM token 消耗（按 Asia/Shanghai 日期 YYYY-MM-DD 为键），用于折线图 */
+  dailyToken: Record<string, TokenCount>;
 }
 
 export interface StatsData {
@@ -48,6 +59,9 @@ export interface CharacterStatView extends CharacterStat {
 export interface StatsOverview {
   totalChat: number;
   totalPhoto: number;
+  totalTokenInput: number;
+  totalTokenOutput: number;
+  totalApi: number;
   characters: CharacterStatView[];
 }
 
@@ -59,6 +73,10 @@ const CURRENT_BACKFILL_VERSION = 3;
 
 function emptyChannelCount(): ChannelCount {
   return { web: 0, tg: 0 };
+}
+
+function emptyTokenCount(): TokenCount {
+  return { input: 0, output: 0 };
 }
 
 function defaultData(): StatsData {
@@ -73,14 +91,25 @@ function loadStats(): StatsData {
     if (existsSync(STATS_FILE)) {
       const raw = readFileSync(STATS_FILE, "utf8");
       const parsed = JSON.parse(raw) as Partial<StatsData>;
+      const rawChars =
+        parsed.characters && typeof parsed.characters === "object"
+          ? (parsed.characters as Record<string, CharacterStat>)
+          : {};
+      // 兼容升级前的 stats.json：补齐 tokens / apiCalls / dailyToken 字段，避免读取时 undefined
+      for (const cid of Object.keys(rawChars)) {
+        const c = rawChars[cid];
+        c.chat = c.chat || emptyChannelCount();
+        c.photo = c.photo || emptyChannelCount();
+        c.tokens = c.tokens || emptyTokenCount();
+        c.apiCalls = c.apiCalls || emptyChannelCount();
+        c.dailyChat = c.dailyChat || {};
+        c.dailyToken = c.dailyToken || {};
+      }
       cache = {
         version: parsed.version ?? 1,
         backfilled: Boolean(parsed.backfilled),
         backfillVersion: typeof parsed.backfillVersion === "number" ? parsed.backfillVersion : 0,
-        characters:
-          parsed.characters && typeof parsed.characters === "object"
-            ? (parsed.characters as Record<string, CharacterStat>)
-            : {}
+        characters: rawChars
       };
       return cache;
     }
@@ -106,8 +135,20 @@ function saveStats(data: StatsData): void {
 function ensureChar(data: StatsData, id: string): CharacterStat {
   let c = data.characters[id];
   if (!c) {
-    c = { chat: emptyChannelCount(), photo: emptyChannelCount(), dailyChat: {} };
+    c = {
+      chat: emptyChannelCount(),
+      photo: emptyChannelCount(),
+      tokens: emptyTokenCount(),
+      apiCalls: emptyChannelCount(),
+      dailyChat: {},
+      dailyToken: {}
+    };
     data.characters[id] = c;
+  } else {
+    // 兼容旧数据（升级前 stats.json 无 tokens/apiCalls/dailyToken）
+    if (!c.tokens) c.tokens = emptyTokenCount();
+    if (!c.apiCalls) c.apiCalls = emptyChannelCount();
+    if (!c.dailyToken) c.dailyToken = {};
   }
   return c;
 }
@@ -187,28 +228,71 @@ export function recordPhoto(characterId: string, channel: Channel): void {
   saveStats(data);
 }
 
+/** 记录一次 LLM 请求消耗的 token（输入/输出）。仅在确有真实 LLM 用量时调用；无历史回填。 */
+export function recordToken(characterId: string, channel: Channel, input: number, output: number): void {
+  if (!characterId) return;
+  if (!Number.isFinite(input) || !Number.isFinite(output) || (input <= 0 && output <= 0)) return;
+  const data = loadStats();
+  const c = ensureChar(data, characterId);
+  c.tokens.input += input;
+  c.tokens.output += output;
+  const key = todayKey();
+  if (!c.dailyToken[key]) c.dailyToken[key] = { input: 0, output: 0 };
+  c.dailyToken[key].input += input;
+  c.dailyToken[key].output += output;
+  saveStats(data);
+}
+
+/** 记录一次 LLM API 请求（每轮聊天 1 次）。 */
+export function recordApiCall(characterId: string, channel: Channel): void {
+  if (!characterId) return;
+  const data = loadStats();
+  const c = ensureChar(data, characterId);
+  c.apiCalls[channel] += 1;
+  saveStats(data);
+}
+
 export function getStatsOverview(): StatsOverview {
   const data = loadStats();
-  const characters: CharacterStatView[] = Object.keys(data.characters).map((id) => ({
-    id,
-    chat: data.characters[id].chat,
-    photo: data.characters[id].photo,
-    dailyChat: data.characters[id].dailyChat
-  }));
+  const characters: CharacterStatView[] = Object.keys(data.characters).map((id) => {
+    const c = data.characters[id];
+    return {
+      id,
+      chat: c.chat,
+      photo: c.photo,
+      tokens: c.tokens,
+      apiCalls: c.apiCalls,
+      dailyChat: c.dailyChat,
+      dailyToken: c.dailyToken
+    };
+  });
   let totalChat = 0;
   let totalPhoto = 0;
+  let totalTokenInput = 0;
+  let totalTokenOutput = 0;
+  let totalApi = 0;
   for (const c of characters) {
     totalChat += c.chat.web + c.chat.tg;
     totalPhoto += c.photo.web + c.photo.tg;
+    totalTokenInput += c.tokens.input;
+    totalTokenOutput += c.tokens.output;
+    totalApi += c.apiCalls.web + c.apiCalls.tg;
   }
-  return { totalChat, totalPhoto, characters };
+  return { totalChat, totalPhoto, totalTokenInput, totalTokenOutput, totalApi, characters };
 }
 
 /** 重置某角色统计为 0（保留条目，dailyChat 清空）。用于「单角色重置统计」按钮。 */
 export function resetCharacterStats(characterId: string): void {
   if (!characterId) return;
   const data = loadStats();
-  data.characters[characterId] = { chat: emptyChannelCount(), photo: emptyChannelCount(), dailyChat: {} };
+  data.characters[characterId] = {
+    chat: emptyChannelCount(),
+    photo: emptyChannelCount(),
+    tokens: emptyTokenCount(),
+    apiCalls: emptyChannelCount(),
+    dailyChat: {},
+    dailyToken: {}
+  };
   saveStats(data);
 }
 

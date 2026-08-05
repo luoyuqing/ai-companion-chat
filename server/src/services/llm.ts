@@ -372,30 +372,45 @@ export type StreamChunk = {
   text: string;
 };
 
+export interface AssistantUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface AssistantResult {
+  text: string;
+  emotion: Emotion;
+  /** 真实 LLM 请求的 token 用量（本地兜底时为 undefined）；不回填历史 */
+  usage?: AssistantUsage;
+  /** 是否真正发起过 LLM API 请求（本地兜底为 false） */
+  calledApi: boolean;
+}
+
 export async function askAssistant(
   history: ChatMessage[],
   character: DigitalHumanConfig,
   userText: string,
   sessionContext?: SessionContext,
   overrideMode?: RelationshipMode
-): Promise<{ text: string; emotion: Emotion }> {
+): Promise<AssistantResult> {
   const sceneHint = extractSceneHint(history);
   if (!getLlmConfig().apiKey && !process.env.OPENAI_API_KEY) {
     const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
     const text = buildFallbackReply(style, inferEmotionFromModel(userText), userText, sessionContext, sceneHint);
-    return { text, emotion: inferEmotionFromModel(text) };
+    return { text, emotion: inferEmotionFromModel(text), usage: undefined, calledApi: false };
   }
   const client = getOpenAiClient();
   if (!client) {
     const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
     const text = buildFallbackReply(style, inferEmotionFromModel(userText), userText, sessionContext, sceneHint);
-    return { text, emotion: inferEmotionFromModel(text) };
+    return { text, emotion: inferEmotionFromModel(text), usage: undefined, calledApi: false };
   }
 
   const response = await client.chat.completions.create({
     model: resolveLlmModel(),
     temperature: 0.9,
     stream: true,
+    stream_options: { include_usage: true },
     messages: [
       {
         role: "system",
@@ -408,9 +423,14 @@ export async function askAssistant(
 
   let fullText = "";
   let filteredByPolicy = false;
+  let usage: AssistantUsage | undefined;
   for await (const chunk of response) {
     const delta = chunk.choices[0]?.delta?.content;
     if (delta) fullText += delta;
+    const u = (chunk as any).usage || (chunk as any).choices?.[0]?.usage;
+    if (u && typeof u.prompt_tokens === "number") {
+      usage = { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens ?? 0 };
+    }
     if (chunk.choices[0]?.finish_reason === "content_filter") {
       filteredByPolicy = true;
     }
@@ -421,7 +441,7 @@ export async function askAssistant(
     : normalizeModelText(character, sessionContext, fullText, userText, overrideMode, sceneHint);
   const text = normalized || "我在呢，刚刚没听清楚，要不要再说一遍？";
   const emotion = inferEmotionFromModel(text);
-  return { text, emotion };
+  return { text, emotion, usage, calledApi: true };
 }
 
 export async function streamAssistant(
@@ -431,7 +451,7 @@ export async function streamAssistant(
   sessionContext: SessionContext | undefined,
   onChunk: (chunk: StreamChunk) => void,
   overrideMode?: RelationshipMode
-): Promise<{ text: string; emotion: Emotion }> {
+): Promise<AssistantResult> {
   const sceneHint = extractSceneHint(history);
   if (!getLlmConfig().apiKey && !process.env.OPENAI_API_KEY) {
     const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
@@ -448,7 +468,7 @@ export async function streamAssistant(
     }
     const emotion = inferEmotionFromModel(text);
     onChunk({ type: "emotion", text: emotion });
-    return { text, emotion };
+    return { text, emotion, usage: undefined, calledApi: false };
   }
   const client = getOpenAiClient();
   if (!client) {
@@ -468,13 +488,14 @@ export async function streamAssistant(
     if (emotion !== previousEmotion) {
       onChunk({ type: "emotion", text: emotion });
     }
-    return { text, emotion };
+    return { text, emotion, usage: undefined, calledApi: false };
   }
 
   const response = await client.chat.completions.create({
     model: resolveLlmModel(),
     temperature: 0.9,
     stream: true,
+    stream_options: { include_usage: true },
     messages: [
       {
         role: "system",
@@ -488,7 +509,12 @@ export async function streamAssistant(
   let fullText = "";
   let previousEmotion: Emotion = "neutral";
   let filteredByPolicy = false;
+  let usage: AssistantUsage | undefined;
   for await (const chunk of response) {
+    const u = (chunk as any).usage || (chunk as any).choices?.[0]?.usage;
+    if (u && typeof u.prompt_tokens === "number") {
+      usage = { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens ?? 0 };
+    }
     const delta = chunk.choices[0]?.delta?.content;
     if (!delta) continue;
     fullText += delta;
@@ -512,18 +538,18 @@ export async function streamAssistant(
   const finalEmotion = inferEmotionFromModel(normalized || fullText || "我在呢，刚刚没听清楚，要不要再说一遍？");
   onChunk({ type: "emotion", text: finalEmotion });
   if (normalized && normalized !== fullText) {
-    return { text: normalized, emotion: finalEmotion };
+    return { text: normalized, emotion: finalEmotion, usage, calledApi: true };
   }
 
   if (fullText.trim()) {
-    return { text: fullText, emotion: finalEmotion };
+    return { text: fullText, emotion: finalEmotion, usage, calledApi: true };
   }
 
   const style = localStyleText(resolveFlavorMode(sessionContext, character, overrideMode));
   const fallbackText = buildFallbackReply(style, inferEmotionFromModel(userText), userText, sessionContext, sceneHint);
   onChunk({ type: "token", text: fallbackText });
   onChunk({ type: "emotion", text: inferEmotionFromModel(fallbackText) });
-  return { text: fallbackText, emotion: inferEmotionFromModel(fallbackText) };
+  return { text: fallbackText, emotion: inferEmotionFromModel(fallbackText), usage: undefined, calledApi: true };
 }
 
 function inferEmotionFromModel(text: string): Emotion {

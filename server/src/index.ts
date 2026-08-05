@@ -62,7 +62,7 @@ import { getUserMemory, saveUserMemory, deleteUserMemory, formatUserMemorySystem
 import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
 import { getPromptConfig } from "./core/prompts";
 import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
-import { getStatsOverview, resetCharacterStats, deleteCharacterStats, ensureBackfilled } from "./services/stats";
+import { getStatsOverview, resetCharacterStats, deleteCharacterStats, ensureBackfilled, recordChat, recordToken, recordApiCall, type Channel } from "./services/stats";
 
 // 规范化主动推送配置：限制最多 3 个时间点，模式只能是 always/smart。
 // 规范化主动推送配置：限制最多 3 个时间点，模式支持 always/smart/probability；
@@ -634,6 +634,12 @@ app.post("/api/chat/stream", async (req, res) => {
     if (aborted) {
       return;
     }
+
+    // 统计：网页端流式聊天的轮次 / LLM token / API 请求（此前 stream 路径未记录，此处补齐；channel 恒为 web）
+    const statChannel: Channel = "web";
+    recordChat(character.id, statChannel);
+    if (answer.calledApi) recordApiCall(character.id, statChannel);
+    if (answer.usage) recordToken(character.id, statChannel, answer.usage.promptTokens, answer.usage.completionTokens);
 
     const audioUrl = await synthesizeSpeech(answer.text, character);
     const nextContext = buildSessionContext(existingSession, message, answer.text, requestedRelationshipMode);

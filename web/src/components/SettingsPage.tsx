@@ -20,7 +20,8 @@ import {
   settingsLogout,
   settingsInit,
   type StatsChannelCount,
-  type StatsOverview
+  type StatsOverview,
+  type TokenCount
 } from "../services/api";
 
 /**
@@ -693,6 +694,9 @@ interface StatsRow {
   chat: StatsChannelCount;
   photo: StatsChannelCount;
   dailyChat: Record<string, number>;
+  tokens: TokenCount;
+  apiCalls: StatsChannelCount;
+  dailyToken: Record<string, TokenCount>;
 }
 
 function fmtDate(d: Date): string {
@@ -717,6 +721,28 @@ function buildSeries(dailyChat: Record<string, number>, range: StatsRange): Arra
     d.setDate(today.getDate() - i);
     const key = fmtDate(d);
     out.push({ date: key, count: dailyChat[key] || 0 });
+  }
+  return out;
+}
+
+/** 根据区间构造每日 token 双序列（升序）；7/30 天强制补齐缺失日期为 0。 */
+function buildTokenSeries(
+  dailyToken: Record<string, TokenCount>,
+  range: StatsRange
+): Array<{ date: string; input: number; output: number }> {
+  if (range === "all") {
+    return Object.keys(dailyToken)
+      .sort()
+      .map((date) => ({ date, input: dailyToken[date]?.input || 0, output: dailyToken[date]?.output || 0 }));
+  }
+  const days = range === "7" ? 7 : 30;
+  const out: Array<{ date: string; input: number; output: number }> = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = fmtDate(d);
+    out.push({ date: key, input: dailyToken[key]?.input || 0, output: dailyToken[key]?.output || 0 });
   }
   return out;
 }
@@ -771,6 +797,61 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
   );
 }
 
+function StatsChartDual({ series }: { series: Array<{ date: string; input: number; output: number }> }) {
+  const W = 600;
+  const H = 170;
+  const padL = 40;
+  const padR = 14;
+  const padT = 14;
+  const padB = 30;
+  const n = series.length;
+  const maxVal = Math.max(1, ...series.map((s) => Math.max(s.input, s.output)));
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const xAt = (i: number) => (n <= 1 ? padL + plotW / 2 : padL + (plotW * i) / (n - 1));
+  const yAt = (v: number) => padT + plotH - (v / maxVal) * plotH;
+  const lineInput =
+    n <= 1 ? "" : series.map((s, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(s.input).toFixed(1)}`).join(" ");
+  const lineOutput =
+    n <= 1 ? "" : series.map((s, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(s.output).toFixed(1)}`).join(" ");
+  const areaInput =
+    n <= 1 ? "" : `${lineInput} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
+  const tickCount = n <= 8 ? n : 7;
+  const labelIdx = n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
+  return (
+    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日 Token 折线图">
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
+      {areaInput ? <path d={areaInput} fill="rgba(139,92,246,0.12)" /> : null}
+      {lineInput ? <path d={lineInput} className="stats-line" fill="none" stroke="#8b5cf6" vectorEffect="non-scaling-stroke" /> : null}
+      {lineOutput ? <path d={lineOutput} className="stats-line" fill="none" stroke="#3b82f6" vectorEffect="non-scaling-stroke" /> : null}
+      {series.map((s, i) => (
+        <circle key={`i${i}`} cx={xAt(i)} cy={yAt(s.input)} r={n > 40 ? 1.0 : 2.0} fill="#8b5cf6" vectorEffect="non-scaling-stroke" />
+      ))}
+      {series.map((s, i) => (
+        <circle key={`o${i}`} cx={xAt(i)} cy={yAt(s.output)} r={n > 40 ? 1.0 : 2.0} fill="#3b82f6" vectorEffect="non-scaling-stroke" />
+      ))}
+      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxVal}</text>
+      {labelIdx.map((i) => (
+        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
+          {series[i].date.slice(5)}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+function StatsLegendDual() {
+  return (
+    <div className="stats-legend">
+      <span className="stats-legend-dot" style={{ background: "#8b5cf6" }} />
+      输入 token
+      <span className="stats-legend-dot" style={{ background: "#3b82f6", marginLeft: 8 }} />
+      输出 token
+    </div>
+  );
+}
+
 function StatsLegend() {
   return (
     <div className="stats-legend">
@@ -822,7 +903,10 @@ function StatsTab({
       avatarUrl: dh.avatarUrl,
       chat: s?.chat ?? { web: 0, tg: 0 },
       photo: s?.photo ?? { web: 0, tg: 0 },
-      dailyChat: s?.dailyChat ?? {}
+      dailyChat: s?.dailyChat ?? {},
+      tokens: s?.tokens ?? { input: 0, output: 0 },
+      apiCalls: s?.apiCalls ?? { web: 0, tg: 0 },
+      dailyToken: s?.dailyToken ?? {}
     };
   });
   rows.sort((a, b) => b.chat.tg - a.chat.tg || b.chat.web - a.chat.web);
@@ -835,6 +919,17 @@ function StatsTab({
     }
   }
   const overviewSeries = buildSeries(overviewDaily, range);
+
+  const overviewDailyToken: Record<string, TokenCount> = {};
+  for (const row of rows) {
+    for (const date of Object.keys(row.dailyToken)) {
+      const t = row.dailyToken[date];
+      if (!overviewDailyToken[date]) overviewDailyToken[date] = { input: 0, output: 0 };
+      overviewDailyToken[date].input += t.input;
+      overviewDailyToken[date].output += t.output;
+    }
+  }
+  const overviewTokenSeries = buildTokenSeries(overviewDailyToken, range);
 
   async function doReset(id: string) {
     setBusy(true);
@@ -873,6 +968,26 @@ function StatsTab({
               </div>
             ) : null}
           </div>
+          <div className="stats-overview-card">
+            <div className="stats-overview-num">
+              {stats ? `${(stats.totalTokenInput + stats.totalTokenOutput).toLocaleString()}` : "—"}
+            </div>
+            <div className="stats-overview-label">总 Token 消耗</div>
+            {stats ? (
+              <div className="stats-overview-split">
+                输入 {stats.totalTokenInput.toLocaleString()} · 输出 {stats.totalTokenOutput.toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+          <div className="stats-overview-card">
+            <div className="stats-overview-num">{stats ? stats.totalApi.toLocaleString() : "—"}</div>
+            <div className="stats-overview-label">总 API 请求</div>
+            {stats ? (
+              <div className="stats-overview-split">
+                网页 {stats.characters.reduce((a, c) => a + c.apiCalls.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.apiCalls.tg, 0)}
+              </div>
+            ) : null}
+          </div>
         </div>
         {stats ? (
           <div className="stats-overview-chart">
@@ -883,8 +998,14 @@ function StatsTab({
             <StatsChart series={overviewSeries} />
           </div>
         ) : null}
+        {stats ? (
+          <div className="stats-overview-chart">
+            <StatsLegendDual />
+            <StatsChartDual series={overviewTokenSeries} />
+          </div>
+        ) : null}
         <p className="settings-lock-tip">
-          统计按「消息轮次」累计（每发一条消息 +1），生图仅 Telegram 端支持。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
+          统计按「消息轮次」累计（每发一条消息 +1），生图仅 Telegram 端支持。Token 与 API 请求仅统计 LLM 文本调用（生图/语音不计入），且<strong>自功能上线起累计、无历史回填</strong>。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
         </p>
       </section>
 
@@ -908,6 +1029,8 @@ function StatsTab({
             const expanded = expandedId === row.id;
             const series = buildSeries(row.dailyChat, range);
             const hasData = series.some((s) => s.count > 0);
+            const tokenSeries = buildTokenSeries(row.dailyToken, range);
+            const tokenHasData = tokenSeries.some((s) => s.input > 0 || s.output > 0);
             return (
               <div className={`stats-card ${expanded ? "expanded" : ""}`} key={row.id}>
                 <div className="stats-card-head">
@@ -933,6 +1056,10 @@ function StatsTab({
                   <span>对话 <b>{totalChat}</b></span>
                   <span>生图 <b>{totalPhoto}</b></span>
                   <span className="stats-card-sub">网页 {row.chat.web} · TG {row.chat.tg}</span>
+                  <span>Token <b>{(row.tokens.input + row.tokens.output).toLocaleString()}</b></span>
+                  <span className="stats-card-sub">入 {row.tokens.input.toLocaleString()} · 出 {row.tokens.output.toLocaleString()}</span>
+                  <span>API <b>{row.apiCalls.web + row.apiCalls.tg}</b></span>
+                  <span className="stats-card-sub">网页 {row.apiCalls.web} · TG {row.apiCalls.tg}</span>
                 </div>
                 <div className="stats-card-actions">
                   <button type="button" className="ghost-btn" disabled={busy} onClick={() => setExpandedId(expanded ? null : row.id)}>
@@ -947,6 +1074,12 @@ function StatsTab({
                         <StatsChart series={series} />
                       </>
                     ) : <p className="stats-empty">该区间暂无聊天数据</p>}
+                    {tokenHasData ? (
+                      <>
+                        <StatsLegendDual />
+                        <StatsChartDual series={tokenSeries} />
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
