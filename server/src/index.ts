@@ -58,7 +58,7 @@ import {
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
 import { startProactiveScheduler } from "./telegram/proactive";
-import { getUserMemory, saveUserMemory, deleteUserMemory } from "./services/userMemory";
+import { getUserMemory, saveUserMemory, deleteUserMemory, formatUserMemorySystemContent } from "./services/userMemory";
 import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
 import { getPromptConfig } from "./core/prompts";
 import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
@@ -578,6 +578,11 @@ app.post("/api/chat/stream", async (req, res) => {
         role: "system",
         content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
       });
+    }
+    // B 类长期记忆（提升为 A 类：后端统一注入，网页流式端不再依赖前端透传，双端一致）
+    const memoryContent = formatUserMemorySystemContent(memBefore, character.name);
+    if (memoryContent) {
+      anchorMsgs.push({ role: "system", content: memoryContent });
     }
     await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
 

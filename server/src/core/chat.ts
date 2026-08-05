@@ -7,7 +7,7 @@ import {
   updateSessionMeta
 } from "../services/session";
 import { recordChat } from "../services/stats";
-import { getUserMemory, saveUserMemory } from "../services/userMemory";
+import { getUserMemory, saveUserMemory, formatUserMemorySystemContent } from "../services/userMemory";
 import { getCharacters, resolveCharacter } from "./data";
 import { markUserActivity } from "./activity";
 import {
@@ -186,6 +186,11 @@ export async function runChat(opts: {
       role: "system",
       content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
     });
+  }
+  // B 类长期记忆（提升为 A 类：后端统一注入，TG 与非流式网页端均生效，双端一致）
+  const memoryContent = formatUserMemorySystemContent(memBefore, character.name);
+  if (memoryContent) {
+    systemMessages.push({ role: "system", content: memoryContent });
   }
   await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
 

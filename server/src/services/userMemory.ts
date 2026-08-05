@@ -82,3 +82,22 @@ export async function deleteUserMemory(characterId: string): Promise<void> {
   }
 }
 
+// B 类长期记忆格式化（提升为 A 类：后端统一注入，使 TG 与非流式网页端也能遵守聊天偏好等设定）
+export function formatUserMemorySystemContent(mem: UserMemory, characterName?: string): string | null {
+  const m = normalize(mem);
+  const hasContent =
+    m.displayName || m.preferredName || m.preferences || m.importantFacts || m.boundaries || m.relationshipNotes;
+  if (!hasContent) return null;
+  const lines = [
+    "长期记忆：以下是用户主动保存给数字人的资料，回答时自然使用，不要逐条复述。",
+    m.displayName ? `用户自称：${m.displayName}` : "",
+    m.preferredName ? `希望数字人称呼用户：${m.preferredName}` : "",
+    m.preferences ? `聊天偏好：${m.preferences}` : "",
+    m.importantFacts ? `重要事实：${m.importantFacts}` : "",
+    m.boundaries ? `聊天禁忌或边界：${m.boundaries}` : "",
+    m.relationshipNotes ? `关系备注：${m.relationshipNotes}` : "",
+    characterName ? `当前数字人：${characterName}` : ""
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+

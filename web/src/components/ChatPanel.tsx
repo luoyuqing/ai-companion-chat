@@ -1,17 +1,14 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
-  Box,
   Brain,
   Coffee,
   Download,
   Hand,
   Heart,
-  Image as ImageIcon,
   MessageCircle,
   Mic,
   MicOff,
   Moon,
-  Pencil,
   Save,
   Send,
   Settings2,
@@ -26,31 +23,30 @@ import {
 import {
   ChatContext,
   ChatMessageRequest,
-  CreateHumanRequest,
+  DEFAULT_CHARACTER_ID,
   DigitalHuman,
   Emotion,
   EmotionProfile,
-  MimoAudioModel,
   Message,
   StreamDoneResponse,
   clearSessionHistory,
-  createDigitalHuman,
+  getSessionHistory,
+  importSessionHistory,
   isLocalCompanionMode,
   resolveMediaUrl,
   sendMessage,
   sendMessageStream,
   synthesizeTts,
   transcribeSpeech,
-  updateDigitalHuman,
-  uploadAvatarFile,
-  uploadModelFile
+  UserMemory,
+  getUserMemory,
+  saveUserMemory as saveUserMemoryApi
 } from "../services/api";
 import { Avatar } from "./Avatar";
 
 const PUBLIC_ASSET_BASE = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
-const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/lina-original.jpg`;
+const defaultAvatarUrl = `${PUBLIC_ASSET_BASE}assets/avatars/linxingwan.png`;
 const assetPlaceholderBase = `${PUBLIC_ASSET_BASE}assets`;
-const AVATAR_MODE_STORAGE_KEY = "dg-avatar-render-mode";
 const CHAT_STATE_STORAGE_PREFIX = "dg-chat-state-v2";
 const LOCAL_HUMANS_STORAGE_KEY = "dg-local-digital-humans-v1";
 const LOCAL_CONTEXT_STORAGE_KEY = "dg-local-chat-context-v1";
@@ -61,7 +57,7 @@ const ACTIVE_SCENE_STORAGE_KEY = "dg-active-companion-scene-v1";
 const AUTO_VOICE_STORAGE_KEY = "dg-auto-voice-v1";
 const VOICE_STYLE_STORAGE_KEY = "dg-voice-style-v1";
 const ADULT_VERIFIED_STORAGE_KEY = "dg-adult-verified-v1";
-const EXPORT_SCHEMA = "digital-girlfriend-local-archive";
+const EXPORT_SCHEMA = "ai-companion-chat-local-archive";
 const MAX_STORED_MESSAGES = 80;
 
 type VoiceStyle = "warm" | "soft" | "mature";
@@ -70,19 +66,6 @@ const voiceStyleOptions: Array<{ id: VoiceStyle; label: string }> = [
   { id: "warm", label: "温柔" },
   { id: "soft", label: "轻声" },
   { id: "mature", label: "沉稳" }
-];
-
-// MiMo mimo-v2.5-tts 官方可选音色（来源：https://mimo.mi.com/docs/zh-CN/api/audio/tts）
-const MIMO_VOICE_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: "mimo_default", label: "MiMo-默认" },
-  { id: "冰糖", label: "冰糖" },
-  { id: "茉莉", label: "茉莉" }
-];
-
-const MIMO_AUDIO_MODELS: Array<{ id: MimoAudioModel; label: string; desc: string }> = [
-  { id: "mimo-v2.5-tts", label: "预置精品音色", desc: "使用内置精品音色合成语音" },
-  { id: "mimo-v2.5-tts-voicedesign", label: "文本设计音色", desc: "用一段文字描述生成专属音色" },
-  { id: "mimo-v2.5-tts-voiceclone", label: "音频复刻音色", desc: "上传音频样本复刻任意声音" }
 ];
 
 type CompanionSceneId = "daily" | "date" | "comfort" | "flirty" | "bedtime";
@@ -153,23 +136,12 @@ interface LocalArchivePayload {
   exportedAt: string;
   sessionId: string;
   selectedCharacterId: string;
-  avatarRenderMode?: "2d" | "3d";
   activeSceneId?: CompanionSceneId;
   userMemory?: UserMemory;
   userMemories?: Record<string, UserMemory>;
   localHumans: DigitalHuman[];
   localContexts: Record<string, ChatContext>;
   chatStates: Array<{ key: string; value: unknown }>;
-}
-
-interface UserMemory {
-  displayName: string;
-  preferredName: string;
-  preferences: string;
-  importantFacts: string;
-  boundaries: string;
-  relationshipNotes: string;
-  updatedAt?: string;
 }
 
 interface State {
@@ -336,32 +308,6 @@ const inferLocalEmotion = (text: string): LocalEmotion => {
   return maxScore > 0 ? matched : "neutral";
 };
 
-function parseEmotionProfile(raw: string): EmotionProfile | undefined {
-  const normalized = raw.trim();
-  if (!normalized) return undefined;
-
-  try {
-    const parsed = JSON.parse(normalized);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-
-    const result: EmotionProfile = {};
-    (Object.keys(parsed) as Array<Emotion>).forEach((emotion) => {
-      if (["happy", "sad", "surprise", "wink", "neutral", "angry", "love"].includes(emotion)) {
-        const value = String((parsed as Record<string, unknown>)[emotion] || "").trim();
-        if (value) {
-          result[emotion] = value;
-        }
-      }
-    });
-
-    return Object.keys(result).length > 0 ? result : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizeEmotionProfileObject(raw: unknown): EmotionProfile | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
@@ -382,7 +328,7 @@ function normalizeEmotionProfileObject(raw: unknown): EmotionProfile | undefined
 
 function getChatStateStorageKey(sessionId: string, characterId: string): string {
   const safeSessionId = encodeURIComponent(sessionId || "session-browser");
-  const safeCharacterId = encodeURIComponent(characterId || "lina");
+  const safeCharacterId = encodeURIComponent(characterId || DEFAULT_CHARACTER_ID);
   return `${CHAT_STATE_STORAGE_PREFIX}:${safeSessionId}:${safeCharacterId}`;
 }
 
@@ -496,26 +442,8 @@ function hasUserMemory(memory: UserMemory): boolean {
   );
 }
 
-function buildUserMemorySystemMessage(memory: UserMemory, character?: DigitalHuman): Message | null {
-  const normalized = normalizeUserMemory(memory);
-  if (!hasUserMemory(normalized)) return null;
-
-  const lines = [
-    "长期记忆：以下是用户主动保存给数字人的资料，回答时自然使用，不要逐条复述。",
-    normalized.displayName ? `用户自称：${normalized.displayName}` : "",
-    normalized.preferredName ? `希望数字人称呼用户：${normalized.preferredName}` : "",
-    normalized.preferences ? `聊天偏好：${normalized.preferences}` : "",
-    normalized.importantFacts ? `重要事实：${normalized.importantFacts}` : "",
-    normalized.boundaries ? `聊天禁忌或边界：${normalized.boundaries}` : "",
-    normalized.relationshipNotes ? `关系备注：${normalized.relationshipNotes}` : "",
-    character?.name ? `当前数字人：${character.name}` : ""
-  ].filter(Boolean);
-
-  return {
-    role: "system",
-    content: lines.join("\n")
-  };
-}
+// B 类长期记忆（聊天偏好等 6 字段）已于 2026-08-05 提升为 A 类，改由后端 runChat / /api/chat/stream 统一注入，
+// 前端不再透传，避免网页端与后端重复注入。参考 server/src/services/userMemory.ts 的 formatUserMemorySystemContent。
 
 function isCompanionSceneId(value: unknown): value is CompanionSceneId {
   return typeof value === "string" && companionScenes.some((scene) => scene.id === value);
@@ -576,10 +504,32 @@ function buildDefaultChatState(character: DigitalHuman | undefined, fallbackId: 
   return {
     messages: [{ role: "assistant", content: welcomeText }],
     emotion: character?.defaultMood || "neutral",
-    characterId: character?.id || fallbackId || "lina",
+    characterId: character?.id || fallbackId || DEFAULT_CHARACTER_ID,
     relationshipMode: character?.relationshipMode || "sweet",
     context: undefined
   };
+}
+
+// 合并服务器历史与本地历史：以服务器为准去重，补回本地独有消息，保证任意设备看到完整一致的记录
+function mergeHistories(server: Message[], local: Message[]): Message[] {
+  const seen = new Set<string>();
+  const result: Message[] = [];
+  const keyOf = (m: Message) => `${m.role}:${(m.content || "").slice(0, 200)}`;
+  for (const m of server) {
+    const k = keyOf(m);
+    if (!seen.has(k)) {
+      seen.add(k);
+      result.push(m);
+    }
+  }
+  for (const m of local) {
+    const k = keyOf(m);
+    if (!seen.has(k)) {
+      seen.add(k);
+      result.push(m);
+    }
+  }
+  return result;
 }
 
 function readStoredChatState(sessionId: string, character: DigitalHuman | undefined, welcomeText: string): State | null {
@@ -602,7 +552,7 @@ function readStoredChatState(sessionId: string, character: DigitalHuman | undefi
       context
     };
   } catch {
-    return buildDefaultChatState(character, character?.id || "lina", welcomeText);
+    return buildDefaultChatState(character, character?.id || DEFAULT_CHARACTER_ID, welcomeText);
   }
 }
 
@@ -680,7 +630,6 @@ function normalizeImportedHumans(raw: unknown): DigitalHuman[] {
       name,
       description: String(value.description || "导入的数字人").trim(),
       avatarUrl: String(value.avatarUrl || defaultAvatarUrl).trim(),
-      modelUrl: String(value.modelUrl || "").trim() || undefined,
       avatarType: value.avatarType === "video" ? "video" : "image",
       emotionProfile: normalizeEmotionProfileObject(value.emotionProfile),
       avatarVideoProfile: normalizeEmotionProfileObject(value.avatarVideoProfile),
@@ -747,14 +696,12 @@ function buildLocalArchive(
     }
   }
 
-  const avatarRenderMode = typeof window !== "undefined" && window.localStorage.getItem(AVATAR_MODE_STORAGE_KEY) === "3d" ? "3d" : "2d";
   return {
     schema: EXPORT_SCHEMA,
     version: 1,
     exportedAt: new Date().toISOString(),
     sessionId,
     selectedCharacterId,
-    avatarRenderMode,
     activeSceneId,
     userMemories: readAllStoredUserMemories(),
     localHumans: normalizeImportedHumans(readLocalStorageJson<unknown>(LOCAL_HUMANS_STORAGE_KEY, [])),
@@ -770,7 +717,7 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
 
   const archive = payload as Partial<LocalArchivePayload>;
   if (archive.schema !== EXPORT_SCHEMA || archive.version !== 1) {
-    throw new Error("不是数字女友本地记录文件");
+    throw new Error("不是 AI伴聊 本地记录文件");
   }
 
   const importedHumans = normalizeImportedHumans(archive.localHumans);
@@ -801,9 +748,6 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
   if (archive.selectedCharacterId) {
     window.localStorage.setItem(SELECTED_CHARACTER_STORAGE_KEY, String(archive.selectedCharacterId));
   }
-  if (archive.avatarRenderMode === "2d" || archive.avatarRenderMode === "3d") {
-    window.localStorage.setItem(AVATAR_MODE_STORAGE_KEY, archive.avatarRenderMode);
-  }
   if (isCompanionSceneId(archive.activeSceneId)) {
     window.localStorage.setItem(ACTIVE_SCENE_STORAGE_KEY, archive.activeSceneId);
   }
@@ -825,27 +769,6 @@ function importLocalArchive(payload: unknown): { humans: number; chats: number; 
   }
 
   return { humans: importedHumans.length, chats: importedChatCount, hasMemory };
-}
-
-interface NewCharacterForm {
-  name: string;
-  description: string;
-  avatarUrl: string;
-  modelUrl: string;
-  voiceProvider: "openai" | "azure" | "local" | "mimo";
-  voice: string;
-  audioModel: MimoAudioModel;
-  voiceId: string;
-  stylePrompt: string;
-  voiceDesignPrompt: string;
-  voiceCloneSample: string;
-  defaultMood: (typeof moods)[number];
-  emotionProfile: string;
-  avatarType: "image" | "video";
-  avatarVideoProfile: string;
-  personalityTagline: string;
-  relationshipMode: (typeof relationshipModes)[number];
-  telegramBotToken: string;
 }
 
 interface ApiHistoryMessage {
@@ -1016,28 +939,18 @@ function resolveSpeechTuning(
     selected.pitch = Math.max(0.92, selected.pitch - 0.02);
     selected.volume = Math.min(selected.volume, 0.88);
   }
-  if (character?.id === "moon") {
-    selected.rate = Math.max(0.8, selected.rate - 0.02);
-    selected.pitch = Math.max(0.92, selected.pitch - 0.03);
-  }
   return selected;
 }
 
 export function ChatPanel({
   characters,
   sessionId,
-  onCreate,
   selectedCharacterId,
-  onDelete,
-  onUpdate,
   onCharacterChange,
   onResetSession
 }: {
   characters: DigitalHuman[];
   sessionId: string;
-  onCreate: (human: DigitalHuman) => void;
-  onDelete: (characterId: string) => Promise<void> | void;
-  onUpdate: (human: DigitalHuman) => void;
   selectedCharacterId: string;
   onCharacterChange: (characterId: string) => void;
   onResetSession: () => void;
@@ -1045,8 +958,7 @@ export function ChatPanel({
   const welcomeText = "你来啦。今天想让我怎么陪你？";
   const initialCharacter = characters.find((item) => item.id === selectedCharacterId) || characters[0];
   const [state, setState] = useState<State>(() =>
-    readStoredChatState(sessionId, initialCharacter, welcomeText) ||
-    buildDefaultChatState(initialCharacter, selectedCharacterId || "lina", welcomeText)
+    buildDefaultChatState(initialCharacter, selectedCharacterId || DEFAULT_CHARACTER_ID, welcomeText)
   );
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1065,54 +977,11 @@ export function ChatPanel({
   const [mediaRecorderSupported, setMediaRecorderSupported] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [isModelUploading, setIsModelUploading] = useState(false);
   const [speechError, setSpeechError] = useState("");
-  const [use3D, setUse3D] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem(AVATAR_MODE_STORAGE_KEY) === "3d";
-  });
   const [avatarInteraction, setAvatarInteraction] = useState<CompanionInteractionId | null>(null);
   const [activeSceneId, setActiveSceneId] = useState<CompanionSceneId>(() => readStoredSceneId());
   const [userMemory, setUserMemory] = useState<UserMemory>(() => readStoredUserMemory(initialCharacter?.id || ""));
   const [memoryStatus, setMemoryStatus] = useState("");
-  const [form, setForm] = useState<NewCharacterForm>({
-    name: "",
-    description: "",
-    avatarUrl: defaultAvatarUrl,
-    modelUrl: "",
-    voiceProvider: "mimo",
-    voice: "冰糖",
-    audioModel: "mimo-v2.5-tts",
-    voiceId: "冰糖",
-    stylePrompt: "",
-    voiceDesignPrompt: "",
-    voiceCloneSample: "",
-    defaultMood: "neutral",
-    emotionProfile: "{}",
-    avatarType: "image",
-    avatarVideoProfile: "{}",
-    personalityTagline: "",
-    telegramBotToken: "",
-    relationshipMode: "sweet"
-  });
-  const [editForm, setEditForm] = useState({
-    name: "",
-    description: "",
-    avatarUrl: "",
-    voice: "冰糖",
-    audioModel: "mimo-v2.5-tts" as MimoAudioModel,
-    voiceId: "冰糖",
-    stylePrompt: "",
-    voiceDesignPrompt: "",
-    voiceCloneSample: "",
-    defaultMood: "neutral" as (typeof moods)[number],
-    relationshipMode: "sweet" as (typeof relationshipModes)[number],
-    personalityTagline: "",
-    telegramBotToken: ""
-  });
-  const [isEditSaving, setIsEditSaving] = useState(false);
-  const [editStatus, setEditStatus] = useState("");
-  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
@@ -1131,51 +1000,84 @@ export function ChatPanel({
   const isCustomCharacter = (characterId: string) => characterId.startsWith("custom-");
   const memoryIsActive = hasUserMemory(userMemory);
 
+  // 旧版长期记忆只存在浏览器 localStorage（键 dg-user-memory-v1:<角色id>），
+  // 重构后改为后端唯一真源。首次打开时把各角色在浏览器里已配置的内容自动迁移到后端，实现还原 + 跨端一致。
+  const migratedLocalMemoriesRef = useRef(false);
   useEffect(() => {
-    setUserMemory(readStoredUserMemory(state.characterId));
+    let cancelled = false;
     setMemoryStatus("");
+    (async () => {
+      // 一次性把旧版 localStorage 里已配置的长期记忆上传到后端（仅当后端为空，避免覆盖）。
+      if (!migratedLocalMemoriesRef.current) {
+        migratedLocalMemoriesRef.current = true;
+        const locals = readAllStoredUserMemories();
+        for (const cid of Object.keys(locals)) {
+          try {
+            const backend = await getUserMemory(cid);
+            if (!hasUserMemory(backend)) {
+              await saveUserMemoryApi(cid, locals[cid]);
+            }
+          } catch {
+            /* 单条失败忽略，继续迁移其它角色 */
+          }
+        }
+      }
+      // 长期记忆是后端唯一真源：切角色时从服务器加载（localStorage 仅作离线兜底）。
+      const fallback = readStoredUserMemory(state.characterId);
+      try {
+        const mem = await getUserMemory(state.characterId);
+        if (!cancelled) setUserMemory(mem);
+      } catch {
+        if (!cancelled) setUserMemory(fallback);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [state.characterId]);
-
-  useEffect(() => {
-    if (!activeCharacter) return;
-    setEditForm({
-      name: activeCharacter.name || "",
-      description: activeCharacter.description || "",
-      avatarUrl: activeCharacter.avatarUrl || "",
-      voice: activeCharacter.voiceProfile?.voice || "冰糖",
-      audioModel: (activeCharacter.voiceProfile?.audioModel as MimoAudioModel) || "mimo-v2.5-tts",
-      voiceId: activeCharacter.voiceProfile?.voiceId || "冰糖",
-      stylePrompt: activeCharacter.voiceProfile?.stylePrompt || "",
-      voiceDesignPrompt: activeCharacter.voiceProfile?.voiceDesignPrompt || "",
-      voiceCloneSample: activeCharacter.voiceProfile?.voiceCloneSample || "",
-      defaultMood: (moods as readonly string[]).includes(activeCharacter.defaultMood || "")
-        ? (activeCharacter.defaultMood as (typeof moods)[number])
-        : "neutral",
-      relationshipMode: relationshipModes.includes((activeCharacter.relationshipMode || "sweet") as (typeof relationshipModes)[number])
-        ? (activeCharacter.relationshipMode as (typeof relationshipModes)[number])
-        : "sweet",
-      personalityTagline: activeCharacter.personalityTagline || "",
-      // telegramBotToken 为敏感凭证，后端不在列表中返回明文，故编辑时留空表示不修改现有 token，填写则更新
-      telegramBotToken: ""
-    });
-    setEditStatus("");
-  }, [activeCharacter?.id]);
 
   useEffect(() => {
     const preferred = characters.find((item) => item.id === selectedCharacterId) || characters[0];
     if (!preferred) return;
     const nextStorageKey = getChatStateStorageKey(sessionId, preferred.id);
-    setState((prev) => {
-      if (prev.characterId === preferred.id && activeChatStorageKeyRef.current === nextStorageKey) {
-        return {
-          ...prev,
-          relationshipMode: prev.relationshipMode || preferred.relationshipMode || "sweet"
-        };
+    activeChatStorageKeyRef.current = nextStorageKey;
+    // 先用本地缓存兜底渲染，保证离线/接口异常时仍可用
+    const local = readStoredChatState(sessionId, preferred, welcomeText);
+    setState(buildDefaultChatState(preferred, preferred.id, welcomeText));
+
+    // 再从服务器拉取该数字人的完整会话（跨浏览器 / 跨设备 / 含 TG 的唯一真源）
+    let cancelled = false;
+    (async () => {
+      try {
+        const serverHistory = await getSessionHistory(preferred.id);
+        if (cancelled) return;
+        if (!serverHistory || serverHistory.length === 0) {
+          // 服务器无有效记录（含已被清空）：以空对话为准，丢弃浏览器遗留的本地记录，避免已删除的对话“复活”
+          removeStoredChatState(sessionId, preferred.id);
+          setState((prev) => ({
+            ...prev,
+            messages: buildDefaultChatState(preferred, preferred.id, welcomeText).messages,
+            characterId: preferred.id
+          }));
+          return;
+        }
+        const localMessages = local?.messages || [];
+        const merged = mergeHistories(serverHistory, localMessages);
+        setState((prev) => ({ ...prev, messages: merged, characterId: preferred.id }));
+        // 若本地有服务器没有的消息，把合并结果写回服务器，收敛到单一真源
+        if (merged.length > serverHistory.length) {
+          await importSessionHistory(preferred.id, merged);
+        }
+      } catch {
+        // 离线或接口异常时，用浏览器本地记录兜底显示，不影响使用
+        if (local?.messages?.length) {
+          setState((prev) => ({ ...prev, messages: local.messages, characterId: preferred.id }));
+        }
       }
-      activeChatStorageKeyRef.current = nextStorageKey;
-      return readStoredChatState(sessionId, preferred, welcomeText) ||
-        buildDefaultChatState(preferred, preferred.id, welcomeText);
-    });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedCharacterId, characters, sessionId]);
 
   useEffect(() => {
@@ -1516,8 +1418,8 @@ export function ChatPanel({
     }));
     const requestScene = sceneOverride || activeScene;
     const sceneMessage = buildSceneSystemMessage(requestScene, activeCharacter, adultVerified || adultOverride);
-    const memoryMessage = buildUserMemorySystemMessage(userMemory, activeCharacter);
-    const systemMessages = [sceneMessage, memoryMessage].filter(Boolean) as ApiHistoryMessage[];
+    // B 类长期记忆改由后端统一注入（双端一致），前端不再透传，避免重复注入
+    const systemMessages = [sceneMessage].filter(Boolean) as ApiHistoryMessage[];
     const nextHistory: ApiHistoryMessage[] = [...systemMessages, ...visibleHistory];
 
     setState((prev) => ({ ...prev, messages: [...prev.messages, userBubble], emotion: preEmotion }));
@@ -1671,35 +1573,47 @@ export function ChatPanel({
     }
   };
 
-  const saveUserMemory = () => {
+  const saveUserMemory = async () => {
+    setMemoryStatus("保存到服务器中…");
     try {
+      const saved = await saveUserMemoryApi(state.characterId, userMemory);
+      setUserMemory(saved);
+      // localStorage 仅作离线兜底
+      writeStoredUserMemory(state.characterId, saved);
+      setMemoryStatus(hasUserMemory(saved) ? "记忆已保存到服务器，跨设备/跨端一致，会从下一条消息开始生效。" : "记忆已清空。");
+    } catch {
+      // 服务器不可达：降级为仅写本地
       const saved = writeStoredUserMemory(state.characterId, userMemory);
       setUserMemory(saved);
-      setMemoryStatus(hasUserMemory(saved) ? "记忆已保存（仅对当前数字人生效），会从下一条消息开始生效。" : "记忆已清空。");
-    } catch {
-      setMemoryStatus("保存失败，请检查浏览器本地存储权限。");
+      setMemoryStatus("服务器保存失败，已暂存本地（其他设备可能不同步）。");
     }
   };
 
-  const clearUserMemory = () => {
+  const clearUserMemory = async () => {
+    const empty = { ...emptyUserMemory };
+    setUserMemory(empty);
+    try {
+      await saveUserMemoryApi(state.characterId, empty);
+    } catch {
+      // 忽略服务器错误，本地仍清空
+    }
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(userMemoryStorageKey(state.characterId));
       window.localStorage.removeItem(USER_MEMORY_STORAGE_KEY);
     }
-    setUserMemory({ ...emptyUserMemory });
-    setMemoryStatus("记忆已清空。");
+    setMemoryStatus("记忆已清空（服务器与本地均已清除）。");
   };
 
   const resetConversation = async () => {
     if (isLoading) return;
 
     const currentCharacter = characters.find((item) => item.id === state.characterId) || initialCharacter || null;
-    const resetCharacterId = currentCharacter?.id || state.characterId || selectedCharacterId || "lina";
+    const resetCharacterId = currentCharacter?.id || state.characterId || selectedCharacterId || DEFAULT_CHARACTER_ID;
     const resetState = buildDefaultChatState(currentCharacter || undefined, resetCharacterId, welcomeText);
     removeStoredChatState(sessionId, resetCharacterId);
     setIsLoading(true);
     try {
-      await clearSessionHistory(sessionId);
+      await clearSessionHistory(sessionId, resetCharacterId);
     } catch {
       // ignore clear failures
     }
@@ -1726,258 +1640,6 @@ export function ChatPanel({
     );
   };
 
-  const removeCharacter = async () => {
-    if (isLoading) return;
-
-    const currentId = state.characterId || selectedCharacterId;
-    if (!currentId) {
-      return;
-    }
-    if (characters.length <= 1) {
-      setSpeechError("至少保留一个数字人，不能全部删除");
-      return;
-    }
-
-    const currentName = characters.find((item) => item.id === currentId)?.name || "该数字人";
-    if (typeof window !== "undefined" && !window.confirm(`确定删除「${currentName}」吗？删除后不可恢复。`)) {
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      await onDelete(currentId);
-      removeStoredChatStatesForCharacter(currentId);
-      const remaining = characters.filter((item) => item.id !== currentId);
-      const fallbackCharacter = remaining[0];
-      if (fallbackCharacter?.id) {
-        activeChatStorageKeyRef.current = getChatStateStorageKey(sessionId, fallbackCharacter.id);
-        setState(
-          readStoredChatState(sessionId, fallbackCharacter, welcomeText) ||
-          buildDefaultChatState(fallbackCharacter, fallbackCharacter.id, welcomeText)
-        );
-        onCharacterChange(fallbackCharacter.id);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleAvatarFile = async (fileList: FileList | null, target: "create" | "edit") => {
-    const file = fileList?.[0];
-    if (!file) return;
-
-    const isImage =
-      /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name) ||
-      /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(file.type);
-    if (!isImage) {
-      setSpeechError("请上传 png / jpg / webp / gif / svg 图片");
-      return;
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      setSpeechError("头像图片不能超过 8MB");
-      return;
-    }
-
-    setIsAvatarUploading(true);
-    try {
-      const fileBase64 = await blobToBase64(file);
-      const uploaded = await uploadAvatarFile({
-        fileName: file.name,
-        fileBase64,
-        mimeType: file.type || undefined
-      });
-      if (target === "create") {
-        setForm((prev) => ({ ...prev, avatarUrl: uploaded.avatarUrl }));
-        setSpeechError("头像已上传 ✓");
-      } else {
-        setEditForm((prev) => ({ ...prev, avatarUrl: uploaded.avatarUrl }));
-        setEditStatus("头像已上传，记得点「保存修改」生效");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "头像上传失败";
-      if (target === "create") {
-        setSpeechError(message);
-      } else {
-        setEditStatus(message);
-      }
-    } finally {
-      setIsAvatarUploading(false);
-    }
-  };
-
-  const saveEdit = async (evt: FormEvent) => {
-    evt.preventDefault();
-    if (isEditSaving || isAvatarUploading) return;
-
-    const currentId = state.characterId || selectedCharacterId;
-    if (!currentId) return;
-
-    if (!editForm.name.trim() || !editForm.description.trim()) {
-      setEditStatus("名字和人设描述不能为空");
-      return;
-    }
-
-    setIsEditSaving(true);
-    setEditStatus("");
-    try {
-      const effectiveVoice = editForm.audioModel === "mimo-v2.5-tts"
-        ? (editForm.voiceId || "冰糖")
-        : (editForm.voice.trim() || "mimo_default");
-      const { human } = await updateDigitalHuman(currentId, {
-        name: editForm.name.trim(),
-        description: editForm.description.trim(),
-        avatarUrl: editForm.avatarUrl.trim() || undefined,
-        voice: effectiveVoice,
-        voiceProvider: "mimo",
-        audioModel: editForm.audioModel,
-        voiceId: editForm.audioModel === "mimo-v2.5-tts" ? editForm.voiceId : undefined,
-        stylePrompt: editForm.audioModel === "mimo-v2.5-tts" ? editForm.stylePrompt : undefined,
-        voiceDesignPrompt: editForm.audioModel === "mimo-v2.5-tts-voicedesign" ? editForm.voiceDesignPrompt : undefined,
-        voiceCloneSample: editForm.audioModel === "mimo-v2.5-tts-voiceclone" ? editForm.voiceCloneSample : undefined,
-        defaultMood: editForm.defaultMood,
-        relationshipMode: editForm.relationshipMode,
-        personalityTagline: editForm.personalityTagline.trim(),
-        ...(editForm.telegramBotToken.trim()
-          ? { telegramBotToken: editForm.telegramBotToken.trim() }
-          : {})
-      });
-      onUpdate(human);
-      setEditStatus("已保存 ✓");
-    } catch (error) {
-      setEditStatus(error instanceof Error ? error.message : "保存失败，请重试");
-    } finally {
-      setIsEditSaving(false);
-    }
-  };
-
-  const handleVoiceCloneFile = async (fileList: FileList | null, mode: "edit" | "create") => {
-    const file = fileList?.[0];
-    if (!file) return;
-    const lower = file.name.toLowerCase();
-    const okType = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"].includes(file.type) || lower.endsWith(".mp3") || lower.endsWith(".wav");
-    if (!okType) {
-      if (mode === "edit") setEditStatus("仅支持 mp3 / wav 格式");
-      else setSpeechError("仅支持 mp3 / wav 格式");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      if (mode === "edit") setEditStatus("音频样本不能超过 10MB");
-      else setSpeechError("音频样本不能超过 10MB");
-      return;
-    }
-    const base64 = await blobToBase64(file);
-    const mime = file.type.includes("wav") ? "audio/wav" : "audio/mpeg";
-    const dataUri = `data:${mime};base64,${base64}`;
-    if (mode === "edit") {
-      setEditForm((prev) => ({ ...prev, voiceCloneSample: dataUri }));
-      setEditStatus("");
-    } else {
-      setForm((prev) => ({ ...prev, voiceCloneSample: dataUri }));
-    }
-  };
-
-  const handleModelFile = async (fileList: FileList | null) => {
-    const file = fileList?.[0];
-    if (!file) return;
-    const isModelFile =
-      file.name.toLowerCase().endsWith(".glb") ||
-      file.name.toLowerCase().endsWith(".gltf") ||
-      file.type === "model/gltf-binary" ||
-      file.type === "model/gltf+json";
-
-    if (!isModelFile) {
-      setSpeechError("请上传 .glb 或 .gltf 模型文件");
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(file);
-    modelObjectUrlsRef.current.push(objectUrl);
-    setForm((prev) => ({ ...prev, modelUrl: objectUrl }));
-    setIsModelUploading(true);
-    setSpeechError("模型已进入本地预览，正在尝试上传到后端...");
-
-    try {
-      const fileBase64 = await blobToBase64(file);
-      const uploaded = await uploadModelFile({
-        fileName: file.name,
-        fileBase64,
-        mimeType: file.type || undefined,
-        fallbackUrl: objectUrl
-      });
-      setForm((prev) => ({ ...prev, modelUrl: uploaded.modelUrl }));
-      setSpeechError(uploaded.hasFallback ? "静态模式已使用本地模型预览；刷新页面后请重新上传。" : "模型已上传，可创建持久化 3D 数字人。");
-    } catch (error) {
-      setSpeechError(error instanceof Error ? error.message : "模型上传失败，已保留本地预览");
-    } finally {
-      setIsModelUploading(false);
-    }
-  };
-
-  const create = async (evt: FormEvent) => {
-    evt.preventDefault();
-    if (isLoading || isModelUploading) return;
-
-    const emotionProfile = parseEmotionProfile(form.emotionProfile);
-    const avatarVideoProfile = parseEmotionProfile(form.avatarVideoProfile);
-    const effectiveVoice = form.audioModel === "mimo-v2.5-tts"
-      ? (form.voiceId || "冰糖")
-      : (form.voice.trim() || "mimo_default");
-    const payload: CreateHumanRequest = {
-      name: form.name.trim(),
-      description: form.description.trim(),
-      avatarUrl: form.avatarUrl.trim(),
-      modelUrl: form.modelUrl.trim() || undefined,
-      avatarType: form.avatarType,
-      voiceProvider: form.voiceProvider,
-      voice: effectiveVoice,
-      audioModel: form.audioModel,
-      voiceId: form.audioModel === "mimo-v2.5-tts" ? form.voiceId : undefined,
-      stylePrompt: form.audioModel === "mimo-v2.5-tts" ? form.stylePrompt : undefined,
-      voiceDesignPrompt: form.audioModel === "mimo-v2.5-tts-voicedesign" ? form.voiceDesignPrompt : undefined,
-      voiceCloneSample: form.audioModel === "mimo-v2.5-tts-voiceclone" ? form.voiceCloneSample : undefined,
-      defaultMood: form.defaultMood,
-      personalityTagline: form.personalityTagline.trim(),
-      relationshipMode: form.relationshipMode,
-      ...(form.telegramBotToken.trim() ? { telegramBotToken: form.telegramBotToken.trim() } : {}),
-      ...(emotionProfile ? { emotionProfile } : {}),
-      ...(avatarVideoProfile ? { avatarVideoProfile } : {})
-    };
-
-    if (!payload.name || !payload.description || !payload.avatarUrl || !payload.voice) {
-      setSpeechError("请完整填写数字人信息");
-      return;
-    }
-
-    try {
-      const created = await createDigitalHuman(payload);
-      onCreate(created.human);
-      onCharacterChange(created.human.id);
-      activeChatStorageKeyRef.current = getChatStateStorageKey(sessionId, created.human.id);
-      setState(buildDefaultChatState(created.human, created.human.id, welcomeText));
-      setForm({
-        ...form,
-        name: "",
-        description: "",
-        avatarUrl: defaultAvatarUrl,
-        modelUrl: "",
-        voiceProvider: "mimo",
-        voice: "冰糖",
-        audioModel: "mimo-v2.5-tts",
-        voiceId: "冰糖",
-        stylePrompt: "",
-        voiceDesignPrompt: "",
-        voiceCloneSample: "",
-        emotionProfile: "{}",
-        avatarType: "image",
-        avatarVideoProfile: "{}",
-        personalityTagline: "",
-        relationshipMode: "sweet",
-        defaultMood: "neutral"
-      });
-    } catch (_e) {
-      // create failed: keep form for retry, do not block chat
-    }
-  };
 
   const toggleVoiceInput = () => {
     if (isLoading || isTranscribing) {
@@ -2023,16 +1685,6 @@ export function ChatPanel({
 
   const canUseVoiceInput = speechSupported || mediaRecorderSupported;
 
-  const toggleAvatarMode = () => {
-    setUse3D((current) => {
-      const next = !current;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(AVATAR_MODE_STORAGE_KEY, next ? "3d" : "2d");
-      }
-      return next;
-    });
-  };
-
   const toggleAutoVoice = () => {
     const next = !autoVoice;
     window.localStorage.setItem(AUTO_VOICE_STORAGE_KEY, String(next));
@@ -2058,12 +1710,12 @@ export function ChatPanel({
     if (typeof window === "undefined") return;
 
     try {
-      const archive = buildLocalArchive(sessionId, state.characterId || selectedCharacterId || "lina", state, activeSceneId);
+      const archive = buildLocalArchive(sessionId, state.characterId || selectedCharacterId || DEFAULT_CHARACTER_ID, state, activeSceneId);
       const blob = new Blob([JSON.stringify(archive, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `digital-girlfriend-archive-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `ai-companion-chat-archive-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -2121,9 +1773,6 @@ export function ChatPanel({
               </option>
             ))}
           </select>
-          <button type="button" className="delete-btn" onClick={removeCharacter} disabled={isLoading || characters.length <= 1}>
-            <Trash2 size={14} /> 删除当前数字人
-          </button>
           <p className="desc">{characters.find((c) => c.id === state.characterId)?.description}</p>
         </div>
 
@@ -2131,395 +1780,12 @@ export function ChatPanel({
           emotion={state.emotion}
           speaking={speaking}
           avatarUrl={activeCharacter?.avatarUrl || defaultAvatarUrl}
-          modelUrl={activeCharacter?.modelUrl}
           name={activeCharacter?.name || "数字人"}
           emotionProfile={activeCharacter?.emotionProfile}
           avatarType={activeCharacter?.avatarType}
           avatarVideoProfile={activeCharacter?.avatarVideoProfile}
-          use3D={use3D}
           interaction={avatarInteraction}
         />
-
-        <details className="side-disclosure">
-          <summary><Save size={16} /> 编辑当前数字人</summary>
-          <form onSubmit={saveEdit} className="creator creator-v2">
-            <label className="field">
-              <span className="field-label">名字</span>
-              <input
-                value={editForm.name}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
-                placeholder="数字人名字"
-              />
-            </label>
-
-            <label className="field">
-              <span className="field-label">人设描述</span>
-              <input
-                value={editForm.description}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
-                placeholder="她的性格、身份、说话风格"
-              />
-            </label>
-
-            <div className="field">
-              <span className="field-label">头像（静态图片）</span>
-              <label className="file-picker">
-                {isAvatarUploading ? "上传中..." : "上传新头像（png/jpg/webp/gif/svg，≤8MB）"}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                  disabled={isAvatarUploading}
-                  onChange={(e) => handleAvatarFile(e.currentTarget.files, "edit")}
-                />
-              </label>
-              <input
-                value={editForm.avatarUrl}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
-                placeholder="也可直接粘贴图片 URL"
-              />
-              {editForm.avatarUrl ? (
-                <img
-                  src={resolveMediaUrl(editForm.avatarUrl)}
-                  alt="头像预览"
-                  style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
-                />
-              ) : null}
-            </div>
-
-            <label className="field">
-              <span className="field-label">音频模型</span>
-              <select
-                value={editForm.audioModel}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, audioModel: e.target.value as MimoAudioModel }))}
-              >
-                {MIMO_AUDIO_MODELS.map((o) => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
-              </select>
-              <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === editForm.audioModel)?.desc}</small>
-            </label>
-
-            {editForm.audioModel === "mimo-v2.5-tts" && (
-              <label className="field">
-                <span className="field-label">预制音色（必选）</span>
-                <select
-                  value={MIMO_VOICE_OPTIONS.some((o) => o.id === editForm.voiceId) ? editForm.voiceId : ""}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, voiceId: e.target.value || "冰糖" }))}
-                >
-                  {MIMO_VOICE_OPTIONS.map((o) => (
-                    <option key={o.id} value={o.id}>{o.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {editForm.audioModel === "mimo-v2.5-tts" && (
-              <label className="field">
-                <span className="field-label">风格描述（可选）</span>
-                <input
-                  value={editForm.stylePrompt}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, stylePrompt: e.target.value }))}
-                  placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
-                />
-                <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
-              </label>
-            )}
-
-            {editForm.audioModel === "mimo-v2.5-tts-voicedesign" && (
-              <label className="field">
-                <span className="field-label">音色描述（必填）</span>
-                <input
-                  value={editForm.voiceDesignPrompt}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, voiceDesignPrompt: e.target.value }))}
-                  placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
-                />
-                <small>这段文字会作为音色设计描述传给模型。</small>
-              </label>
-            )}
-
-            {editForm.audioModel === "mimo-v2.5-tts-voiceclone" && (
-              <label className="field">
-                <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
-                <label className="file-picker">
-                  选择音频样本
-                  <input
-                    type="file"
-                    accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav"
-                    onChange={(e) => handleVoiceCloneFile(e.currentTarget.files, "edit")}
-                  />
-                </label>
-                {editForm.voiceCloneSample ? (
-                  <small className="field-hint">已上传样本（{(editForm.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
-                ) : null}
-              </label>
-            )}
-
-            <label className="field">
-              <span className="field-label">默认情绪</span>
-              <select
-                value={editForm.defaultMood}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, defaultMood: e.target.value as (typeof moods)[number] }))
-                }
-              >
-                {moods.map((mood) => (
-                  <option key={mood} value={mood}>
-                    {moodLabelMap[mood]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field-label">关系模式</span>
-              <select
-                value={editForm.relationshipMode}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))
-                }
-              >
-                {relationshipModes.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {relationshipModeLabelMap[mode]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field-label">人设口令（可选）</span>
-              <input
-                value={editForm.personalityTagline}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
-                placeholder="例如：轻松撒娇，但不越界"
-              />
-            </label>
-
-            <label className="field">
-              <span className="field-label">Telegram 机器人 Token（可选）</span>
-              <input
-                type="password"
-                value={editForm.telegramBotToken}
-                onChange={(e) => setEditForm((prev) => ({ ...prev, telegramBotToken: e.target.value }))}
-                placeholder="配置后该数字人将以独立机器人运行；留空则不修改"
-                autoComplete="off"
-              />
-              <small className="field-hint">绑定专属 TG 机器人（一角色一机器人）。仅主人可用，记忆按角色隔离。</small>
-            </label>
-
-            {editStatus ? <small className="field-hint">{editStatus}</small> : null}
-            <button type="submit" disabled={isEditSaving || isAvatarUploading}>
-              {isEditSaving ? "保存中..." : "保存修改"}
-            </button>
-          </form>
-        </details>
-
-        <details className="side-disclosure">
-          <summary><Sparkles size={16} /> 创建数字人</summary>
-          <form onSubmit={create} className="creator creator-v2">
-            <label className="field">
-              <span className="field-label">名字</span>
-              <input
-                value={form.name}
-                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                placeholder="例如：小冰"
-              />
-            </label>
-
-            <label className="field">
-              <span className="field-label">人设描述</span>
-              <input
-                value={form.description}
-                onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
-                placeholder="她的性格、身份、说话风格，例如：温柔懂事的女大学生"
-              />
-            </label>
-
-            <div className="field">
-              <span className="field-label">头像（静态图片）</span>
-              <label className="file-picker">
-                {isAvatarUploading ? "上传中..." : "上传头像图片（png/jpg/webp/gif/svg，≤8MB）"}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                  disabled={isAvatarUploading}
-                  onChange={(e) => handleAvatarFile(e.currentTarget.files, "create")}
-                />
-              </label>
-              <input
-                value={form.avatarUrl}
-                onChange={(e) => setForm((prev) => ({ ...prev, avatarUrl: e.target.value }))}
-                placeholder="也可直接粘贴图片 URL，留空使用默认头像"
-              />
-              {form.avatarUrl ? (
-                <img
-                  src={resolveMediaUrl(form.avatarUrl)}
-                  alt="头像预览"
-                  style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", marginTop: 6 }}
-                />
-              ) : null}
-            </div>
-
-            <details className="creator-advanced">
-              <summary>3D 模型（可选，默认使用静态头像）</summary>
-              <label className="field">
-                <span className="field-label">模型地址</span>
-                <input
-                  value={form.modelUrl}
-                  onChange={(e) => setForm((prev) => ({ ...prev, modelUrl: e.target.value }))}
-                  placeholder="GLB/GLTF 在线地址，或从下方上传"
-                />
-              </label>
-              <label className="file-picker">
-                上传 GLB/GLTF 模型
-                <input
-                  type="file"
-                  accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
-                  onChange={(e) => handleModelFile(e.currentTarget.files)}
-                />
-              </label>
-            </details>
-
-            <label className="field">
-              <span className="field-label">音频模型</span>
-              <select
-                value={form.audioModel}
-                onChange={(e) => setForm((prev) => ({ ...prev, audioModel: e.target.value as MimoAudioModel }))}
-              >
-                {MIMO_AUDIO_MODELS.map((o) => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
-              </select>
-              <small className="field-hint">{MIMO_AUDIO_MODELS.find((o) => o.id === form.audioModel)?.desc}</small>
-            </label>
-
-            {form.audioModel === "mimo-v2.5-tts" && (
-              <label className="field">
-                <span className="field-label">预制音色（必选）</span>
-                <select
-                  value={MIMO_VOICE_OPTIONS.some((o) => o.id === form.voiceId) ? form.voiceId : ""}
-                  onChange={(e) => setForm((prev) => ({ ...prev, voiceId: e.target.value || "冰糖" }))}
-                >
-                  {MIMO_VOICE_OPTIONS.map((o) => (
-                    <option key={o.id} value={o.id}>{o.label}</option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {form.audioModel === "mimo-v2.5-tts" && (
-              <label className="field">
-                <span className="field-label">风格描述（可选）</span>
-                <input
-                  value={form.stylePrompt}
-                  onChange={(e) => setForm((prev) => ({ ...prev, stylePrompt: e.target.value }))}
-                  placeholder="自然语言控制语气，例如：温柔轻快、带一点点撒娇"
-                />
-                <small>会作为 user 消息控制合成语气，留空则使用默认风格。</small>
-              </label>
-            )}
-
-            {form.audioModel === "mimo-v2.5-tts-voicedesign" && (
-              <label className="field">
-                <span className="field-label">音色描述（必填）</span>
-                <input
-                  value={form.voiceDesignPrompt}
-                  onChange={(e) => setForm((prev) => ({ ...prev, voiceDesignPrompt: e.target.value }))}
-                  placeholder="描述想要的音色，例如：温柔自然的中文女声，语速适中"
-                />
-                <small>这段文字会作为音色设计描述传给模型。</small>
-              </label>
-            )}
-
-            {form.audioModel === "mimo-v2.5-tts-voiceclone" && (
-              <label className="field">
-                <span className="field-label">音频样本（mp3 / wav，≤10MB）</span>
-                <label className="file-picker">
-                  选择音频样本
-                  <input
-                    type="file"
-                    accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav"
-                    onChange={(e) => handleVoiceCloneFile(e.currentTarget.files, "create")}
-                  />
-                </label>
-                {form.voiceCloneSample ? (
-                  <small className="field-hint">已上传样本（{(form.voiceCloneSample.length / 1024 / 1024).toFixed(1)} MB）</small>
-                ) : null}
-              </label>
-            )}
-
-            <label className="field">
-              <span className="field-label">默认情绪</span>
-              <select
-                value={form.defaultMood}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, defaultMood: e.target.value as (typeof moods)[number] }))
-                }
-              >
-                {moods.map((mood) => (
-                  <option key={mood} value={mood}>
-                    {moodLabelMap[mood]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field-label">关系模式</span>
-              <select
-                value={form.relationshipMode}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, relationshipMode: e.target.value as (typeof relationshipModes)[number] }))
-                }
-              >
-                {relationshipModes.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {relationshipModeLabelMap[mode]}
-                  </option>
-                ))}
-              </select>
-              <small className="field-hint">决定她和你互动的整体语气。</small>
-            </label>
-
-            <label className="field">
-              <span className="field-label">头像模式</span>
-              <select
-                value={form.avatarType}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, avatarType: e.target.value === "video" ? "video" : "image" }))
-                }
-              >
-                <option value="image">静态头像</option>
-                <option value="video">动态视频（需额外提供情绪视频资源）</option>
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field-label">人设口令（可选）</span>
-              <input
-                value={form.personalityTagline}
-                onChange={(e) => setForm((prev) => ({ ...prev, personalityTagline: e.target.value }))}
-                placeholder="例如：轻松撒娇，但不越界"
-              />
-            </label>
-
-            <label className="field">
-              <span className="field-label">Telegram 机器人 Token（可选）</span>
-              <input
-                type="password"
-                value={form.telegramBotToken}
-                onChange={(e) => setForm((prev) => ({ ...prev, telegramBotToken: e.target.value }))}
-                placeholder="配置后该数字人将以独立机器人运行；留空则不启用"
-                autoComplete="off"
-              />
-              <small className="field-hint">绑定专属 TG 机器人（一角色一机器人）。仅主人可用，记忆按角色隔离。</small>
-            </label>
-
-            <button type="submit" disabled={isModelUploading}>
-              {isModelUploading ? "上传模型中..." : "创建"}
-            </button>
-          </form>
-        </details>
 
         <details className="side-disclosure memory-disclosure">
           <summary>
@@ -2541,61 +1807,16 @@ export function ChatPanel({
           ) : null}
           </section>
 
-          <section className="memory-card">
-          <div className="memory-title">
-            <Brain size={16} />
-            <h3>长期记忆</h3>
-          </div>
-          <label>我是谁</label>
-          <input
-            value={userMemory.displayName}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, displayName: e.target.value }))}
-            placeholder="例如：林，做科研和产品"
-          />
-          <label>希望她怎么称呼我</label>
-          <input
-            value={userMemory.preferredName}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, preferredName: e.target.value }))}
-            placeholder="例如：哥哥 / 阿林 / 亲爱的"
-          />
-          <label>聊天偏好</label>
-          <textarea
-            rows={2}
-            value={userMemory.preferences}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, preferences: e.target.value }))}
-            placeholder="例如：语气自然一点，开心时可以撒娇，压力大时先安慰"
-          />
-          <label>重要事实</label>
-          <textarea
-            rows={2}
-            value={userMemory.importantFacts}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, importantFacts: e.target.value }))}
-            placeholder="例如：最近在做数字女友项目、经常晚上工作"
-          />
-          <label>聊天禁忌或边界</label>
-          <textarea
-            rows={2}
-            value={userMemory.boundaries}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, boundaries: e.target.value }))}
-            placeholder="例如：不要说教；不喜欢机械式客服语气"
-          />
-          <label>关系备注</label>
-          <textarea
-            rows={2}
-            value={userMemory.relationshipNotes}
-            onChange={(e) => setUserMemory((prev) => ({ ...prev, relationshipNotes: e.target.value }))}
-            placeholder="例如：关系节奏偏暧昧、直接、陪伴感强"
-          />
-          <div className="memory-actions">
-            <button type="button" onClick={saveUserMemory}>
-              <Save size={15} />
-              保存记忆
-            </button>
-            <button type="button" className="secondary-btn" onClick={clearUserMemory}>
-              清空
-            </button>
-          </div>
-          {memoryStatus ? <p className="memory-status">{memoryStatus}</p> : null}
+          <section className="memory-card memory-readonly">
+            <div className="memory-title">
+              <Brain size={16} />
+              <h3>关系备注</h3>
+            </div>
+            {userMemory.relationshipNotes?.trim() ? (
+              <p className="memory-readonly-text">{userMemory.relationshipNotes}</p>
+            ) : (
+              <p className="memory-readonly-empty">尚未设置关系备注。前往「设置 → 数字人管理」编辑该数字人，可配置「关于你」与「关系记忆」。</p>
+            )}
           </section>
         </details>
       </section>
@@ -2604,10 +1825,10 @@ export function ChatPanel({
         <div className={`mobile-companion-hero ${avatarInteraction ? `interaction-${avatarInteraction}` : ""}`}>
           <img
             src={resolveMediaUrl(activeCharacter?.avatarUrl || defaultAvatarUrl) || defaultAvatarUrl}
-            alt={activeCharacter?.name || "数字女友"}
+            alt={activeCharacter?.name || "AI伴聊"}
           />
           <div>
-            <strong>{activeCharacter?.name || "数字女友"}</strong>
+            <strong>{activeCharacter?.name || "AI伴聊"}</strong>
             <span>{activeScene.label} · 在线陪你</span>
           </div>
         </div>
@@ -2706,10 +1927,6 @@ export function ChatPanel({
                 </button>
                 <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={isLoading}>
                   <Upload size={16} /> 导入记录
-                </button>
-                <button type="button" onClick={toggleAvatarMode}>
-                  {use3D ? <ImageIcon size={16} /> : <Box size={16} />}
-                  切换到 {use3D ? "2D" : "3D"}
                 </button>
                 {adultVerified ? (
                   <button type="button" onClick={disableAdultAccess}>
