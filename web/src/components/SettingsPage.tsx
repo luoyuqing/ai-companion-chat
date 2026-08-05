@@ -751,16 +751,16 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
   return (
     <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日聊天折线图">
       {/* 基准网格线 */}
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" />
-      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" />
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
       {/* 面积填充 + 折线 */}
       {areaPath ? <path d={areaPath} className="stats-area" /> : null}
-      {linePath ? <path d={linePath} className="stats-line" fill="none" /> : null}
+      {linePath ? <path d={linePath} className="stats-line" fill="none" vectorEffect="non-scaling-stroke" /> : null}
       {series.map((s, i) => (
-        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.2 : 2.4} className="stats-dot" />
+        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot" vectorEffect="non-scaling-stroke" />
       ))}
       {/* Y 轴峰值标注 */}
-      <text x={padL} y={padT + 2} className="stats-axis stats-axis-y">{maxCount}</text>
+      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
       {/* X 轴日期 */}
       {labelIdx.map((i) => (
         <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
