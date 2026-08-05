@@ -5,8 +5,9 @@
  * - 统计使用独立的 stats.json 累加器，而非从会话派生，避免「清除记忆」误伤统计。
  * - 每次聊天回合（user 消息轮次）与每次成功生图回发时累加，数据实时落盘。
  * - 首次启动 best-effort 从历史会话反推历史聊天轮次作为种子。
- *   历史回填采用「方案 A」：历史会话（mem-/tg-/mem: 前缀）一律归为 TG 渠道（属主主要用 TG），
- *   按会话 createdAt 的 Asia/Shanghai 日期分布到 dailyChat。生图历史无可靠来源，不回填。
+ *   历史回填采用「方案 A + X」：历史会话（mem-/tg-/mem: 前缀）一律归为 TG 渠道（属主主要用 TG）；
+ *   按会话 createdAt→updatedAt 的活跃自然日区间将轮次均摊到 dailyChat（方案 X，避免全部塌缩到首日）。
+ *   生图历史无可靠来源，不回填。
  * - 通过 backfillVersion 控制回填版本：版本升级时启动自动重跑（重跑前保留实时生图计数，清空聊天计数重算）。
  * - stats.json 已加入 .gitignore，绝不入库。
  */
@@ -53,7 +54,8 @@ export interface StatsOverview {
 const STATS_FILE = join(DATA_DIR, "stats.json");
 
 /** 当前回填逻辑版本。改动回填口径（渠道/日期规则）时递增，触发启动重跑。 */
-const CURRENT_BACKFILL_VERSION = 2;
+// 历史：1=初版(updatedAt) → 2=方案A(全归tg+createdAt) → 3=方案X(按活跃区间均摊)
+const CURRENT_BACKFILL_VERSION = 3;
 
 function emptyChannelCount(): ChannelCount {
   return { web: 0, tg: 0 };
@@ -132,6 +134,26 @@ function dateKeyFromISO(iso?: string): string {
   return todayKey(d);
 }
 
+/** 两个 YYYY-MM-DD 之间的自然日数（含端点）。同日返回 1。 */
+function daysBetweenInclusive(a: string, b: string): number {
+  const [ay, am, ad] = a.split("-").map(Number);
+  const [by, bm, bd] = b.split("-").map(Number);
+  const da = Date.UTC(ay, am - 1, ad);
+  const db = Date.UTC(by, bm - 1, bd);
+  return Math.max(1, Math.round((db - da) / 86400000) + 1);
+}
+
+/** 对 YYYY-MM-DD 做纯日历 +n 天（UTC 算术，避免时区偏移），返回 YYYY-MM-DD。 */
+function addDaysKey(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 /** 从会话 ID 推断角色 ID：mem-<id> / mem:<id>(TG 属主) / tg-<chatId>-<id>(TG) */
 function characterIdFromSessionId(sid: string): string | null {
   if (!sid) return null;
@@ -201,12 +223,13 @@ export function deleteCharacterStats(characterId: string): void {
 }
 
 /**
- * 从历史会话回填聊天轮次（方案 A）。
+ * 从历史会话回填聊天轮次（方案 A + X）。
  * - 重跑前快照并保留已累积的生图计数（生图仅来自实时回发，无法从历史会话反推）；
  *   清空各角色 chat / dailyChat，以 session 历史为准重新计算（幂等，重跑后实时计数继续累积）。
- * - 每个会话统计 history 中 role:user 的条数作为该角色聊天轮次。
+ * - 每个会话统计 history 中 role:user 的条数作为该角色聊天轮次（总量计入渠道）。
  * - 渠道：历史 mem-/tg-/mem: 一律归 TG（属主主要使用 TG）。
- * - 日期：按会话 createdAt（首聊），统一 Asia/Shanghai 日期。
+ * - 日期（方案 X）：按会话 createdAt→updatedAt 的活跃自然日区间，将轮次均摊到每日
+ *   （整数按「每日基础量 + 前 remainder 天各 +1」分配，单日会话退化为原逻辑），统一 Asia/Shanghai 日期。
  */
 export function backfillFromSessions(): void {
   const data = loadStats();
@@ -238,12 +261,21 @@ export function backfillFromSessions(): void {
           if (!cid) continue;
           const userCount = (sess.history || []).filter((m) => m.role === "user").length;
           if (userCount <= 0) continue;
-          const dateKey = dateKeyFromISO(sess.createdAt || sess.updatedAt) || todayKey();
           const channel: Channel = "tg"; // 方案 A：历史会话全部归 TG
           const c = ensureChar(data, cid);
           c.photo = preservedPhoto[cid] || emptyChannelCount();
           c.chat[channel] += userCount;
-          c.dailyChat[dateKey] = (c.dailyChat[dateKey] || 0) + userCount;
+          // 方案 X：按会话活跃自然日区间（createdAt→updatedAt）均摊轮次，避免全部塌缩到首日
+          const startKey = dateKeyFromISO(sess.createdAt) || dateKeyFromISO(sess.updatedAt) || todayKey();
+          const endKey = dateKeyFromISO(sess.updatedAt) || dateKeyFromISO(sess.createdAt) || todayKey();
+          const days = daysBetweenInclusive(startKey, endKey);
+          const perDay = Math.floor(userCount / days);
+          const remainder = userCount % days;
+          for (let i = 0; i < days; i++) {
+            const k = addDaysKey(startKey, i);
+            const add = perDay + (i < remainder ? 1 : 0);
+            c.dailyChat[k] = (c.dailyChat[k] || 0) + add;
+          }
         } catch (err) {
           console.error(`[stats] 回填会话 ${f} 失败，跳过：`, err instanceof Error ? err.message : err);
         }
@@ -255,7 +287,7 @@ export function backfillFromSessions(): void {
   data.backfilled = true;
   data.backfillVersion = CURRENT_BACKFILL_VERSION;
   saveStats(data);
-  console.log("[stats] 历史会话回填完成");
+  console.log(`[stats] 历史会话回填完成 (backfillVersion ${CURRENT_BACKFILL_VERSION})`);
 }
 
 /** 启动时调用：未回填或回填版本落后则重跑。 */
