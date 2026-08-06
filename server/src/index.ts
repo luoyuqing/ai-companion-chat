@@ -24,8 +24,9 @@ import {
 } from "./types";
 
 // 数据层与对话编排统一复用 core 模块，避免网页端与 Telegram 端逻辑分叉
-import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize } from "./core/chat";
+import { runChat, buildModelHistory, generateMemoryForSession, isSummaryModeEnabled, maybeSummarize, formatMsgTimestamp, withTimestampPrefix } from "./core/chat";
 import { markUserActivity } from "./core/activity";
+import { getUserMemory, saveUserMemory } from "./services/userMemory";
 import {
   applyCharacterPatch,
   AUDIO_DIR,
@@ -57,10 +58,11 @@ import {
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
 import { startProactiveScheduler } from "./telegram/proactive";
-import { getUserMemory, saveUserMemory, deleteUserMemory } from "./services/userMemory";
+import { getUserMemory, saveUserMemory, deleteUserMemory, formatUserMemorySystemContent } from "./services/userMemory";
 import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
 import { getPromptConfig } from "./core/prompts";
 import { requireSettingsAuth, settingsAuthChangePassword, settingsAuthInit, settingsAuthLogin, settingsAuthLogout } from "./core/settings-auth";
+import { getStatsOverview, resetCharacterStats, deleteCharacterStats, ensureBackfilled, recordChat, recordToken, recordApiCall, type Channel } from "./services/stats";
 
 // 规范化主动推送配置：限制最多 3 个时间点，模式只能是 always/smart。
 // 规范化主动推送配置：限制最多 3 个时间点，模式支持 always/smart/probability；
@@ -152,6 +154,38 @@ app.post("/api/settings/prompts/reset", (_req, res) => {
     res.json({ ...publicSystemConfig(), prompts: getPromptConfig() });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "重置提示词失败" });
+  }
+});
+
+// ---------- 聊天统计（与 /api/settings 同鉴权：需设置密码令牌） ----------
+// 统计读接口对设置页开放；重置/删除为写操作，同样需令牌。
+app.get("/api/settings/stats/overview", (_req, res) => {
+  try {
+    res.json(getStatsOverview());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "统计读取失败" });
+  }
+});
+
+app.post("/api/settings/stats/reset/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "digital human id is required" });
+  try {
+    resetCharacterStats(id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "重置统计失败" });
+  }
+});
+
+app.delete("/api/settings/stats/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ error: "digital human id is required" });
+  try {
+    deleteCharacterStats(id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "删除统计失败" });
   }
 });
 
@@ -467,6 +501,7 @@ app.post("/api/chat", async (req, res) => {
       sessionId: body.sessionId,
       message,
       characterId: body.characterId,
+      channel: "web",
       relationshipMode: normalizeRelationshipMode(body.relationshipMode)
     });
 
@@ -534,11 +569,31 @@ app.post("/api/chat/stream", async (req, res) => {
     const existingSession = await loadSession(sessionId);
     const rawHistory = body.history?.length ? normalizeHistory(body.history) : (existingSession?.history ?? []);
 
-    // 总结模式：只把「记忆档案 + 最近窗口」发给模型，避免短上下文模型超限
+    // B4：跨会话时间锚点（流式路径与 /api/chat 一致，让数字人知道上次聊天何时）
+    const memBefore = await getUserMemory(character.id);
+    const anchorMsgs: ChatMessage[] = [];
+    if (memBefore.lastChatAt) {
+      const lastStr = formatMsgTimestamp(Date.parse(memBefore.lastChatAt));
+      anchorMsgs.push({
+        role: "system",
+        content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
+      });
+    }
+    // B 类长期记忆（提升为 A 类：后端统一注入，网页流式端不再依赖前端透传，双端一致）
+    const memoryContent = formatUserMemorySystemContent(memBefore, character.name);
+    if (memoryContent) {
+      anchorMsgs.push({ role: "system", content: memoryContent });
+    }
+    await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
+
+    // B3：历史消息统一加时间前缀（无论是否总结模式），时间锚点作为场景系统消息置顶
     const summaryMode = isSummaryModeEnabled(existingSession?.summaryMode);
-    const history = summaryMode
-      ? buildModelHistory({ history: rawHistory, summaryMode, memoryFile: existingSession?.memoryFile })
-      : rawHistory;
+    const history = buildModelHistory({
+      history: rawHistory,
+      summaryMode,
+      memoryFile: existingSession?.memoryFile,
+      sceneMessages: anchorMsgs
+    });
 
     res.status(200);
     res.set({
@@ -579,6 +634,12 @@ app.post("/api/chat/stream", async (req, res) => {
     if (aborted) {
       return;
     }
+
+    // 统计：网页端流式聊天的轮次 / LLM token / API 请求（此前 stream 路径未记录，此处补齐；channel 恒为 web）
+    const statChannel: Channel = "web";
+    recordChat(character.id, statChannel);
+    if (answer.calledApi) recordApiCall(character.id, statChannel);
+    if (answer.usage) recordToken(character.id, statChannel, answer.usage.promptTokens, answer.usage.completionTokens);
 
     const audioUrl = await synthesizeSpeech(answer.text, character);
     const nextContext = buildSessionContext(existingSession, message, answer.text, requestedRelationshipMode);
@@ -698,6 +759,9 @@ app.delete("/api/digital-humans/:id", async (req, res) => {
   if (characters.length <= 1) {
     return res.status(400).json({ error: "至少保留一个数字人，不能全部删除" });
   }
+
+  // 删除整个数字人时，连带清除其聊天统计（累加器条目一并移除）
+  deleteCharacterStats(characterId);
 
   const deleted = await deleteCustomHumanById(characterId);
   if (deleted) {
@@ -864,3 +928,10 @@ function launchTelegramBots(): void {
 }
 launchTelegramBots();
 startProactiveScheduler();
+
+// 首启从历史会话 best-effort 回填聊天统计（仅执行一次，幂等）
+try {
+  ensureBackfilled();
+} catch (err) {
+  console.error("[stats] 启动回填失败（不影响服务）：", err instanceof Error ? err.message : err);
+}

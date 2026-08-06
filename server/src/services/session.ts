@@ -195,7 +195,7 @@ export async function appendToSession(
 
   const existing = await loadSession(safeId);
   const nextHistory = existing ? [...existing.history] : [];
-  nextHistory.push(message);
+  nextHistory.push({ ...message, ts: Date.now() });
   if (nextHistory.length > MAX_TURNS_PER_SESSION) {
     nextHistory.splice(0, nextHistory.length - MAX_TURNS_PER_SESSION);
   }

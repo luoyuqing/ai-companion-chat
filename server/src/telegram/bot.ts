@@ -34,6 +34,7 @@ import {
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
 import { runPhotoTask, PhotoTimeoutError } from "../services/photoGen";
+import { recordPhoto } from "../services/stats";
 import { clearSession, appendToSession, importSession, loadSession, updateSessionMeta } from "../services/session";
 import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
 
@@ -363,6 +364,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         sessionId: chatSessionId(ctx),
         message,
         characterId: character.id,
+        channel: "tg",
         relationshipMode: sceneOverride
           ? (getSceneById(sceneOverride)?.relationshipMode ?? character.relationshipMode)
           : undefined,
@@ -470,6 +472,7 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
             await ctx.api.sendChatAction(chatId, "upload_photo").catch(() => {});
             await ctx.api.sendPhoto(chatId, new InputFile(photoPath!));
           });
+          recordPhoto(character.id, "tg"); // 统计：生图成功回发 +1（仅 TG 端）
         }
       } else {
         const label = outcome === "timeout" ? "拍照超时了" : "拍照失败了";

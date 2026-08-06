@@ -6,6 +6,8 @@ import {
   makeSessionId,
   updateSessionMeta
 } from "../services/session";
+import { recordChat, recordToken, recordApiCall } from "../services/stats";
+import { getUserMemory, saveUserMemory, formatUserMemorySystemContent } from "../services/userMemory";
 import { getCharacters, resolveCharacter } from "./data";
 import { markUserActivity } from "./activity";
 import {
@@ -53,6 +55,32 @@ export function shouldSummarize(totalMessages: number, hasMemory: boolean): bool
   return (totalMessages - SUMMARY_THRESHOLD) % SUMMARY_INTERVAL === 0;
 }
 
+// 把 Unix 毫秒时间戳格式化为「2026-08-03 周一 21:14」可读串（统一 Asia/Shanghai，与实时块一致）；无值回退"时间未知"。
+export function formatMsgTimestamp(ts?: number): string {
+  if (!ts || !Number.isFinite(ts)) return "时间未知";
+  const d = new Date(ts);
+  const fmt = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const p: Record<string, string> = {};
+  for (const part of fmt.formatToParts(d)) p[part.type] = part.value;
+  return `${p.year}-${p.month}-${p.day} ${p.weekday} ${p.hour}:${p.minute}`;
+}
+
+// 给一条历史消息加「（用户·时间）」前缀，让模型感知其真实发生时刻；系统消息与时间未知者原样保留。
+export function withTimestampPrefix(m: ChatMessage): ChatMessage {
+  if (m.role === "system") return m;
+  const who = m.role === "user" ? "用户" : "助手";
+  return { ...m, content: `（${who}·${formatMsgTimestamp(m.ts)}）${m.content}` };
+}
+
 /**
  * 构造实际发给模型的对话历史：
  * - 总结模式关闭：原样返回（场景系统消息在前）
@@ -68,7 +96,7 @@ export function buildModelHistory(params: {
 }): ChatMessage[] {
   const sceneMessages = params.sceneMessages ?? [];
   if (!params.summaryMode) {
-    return [...sceneMessages, ...params.history];
+    return [...sceneMessages, ...params.history.map(withTimestampPrefix)];
   }
   const recents = params.history
     .filter((m) => m.role !== "system")
@@ -80,7 +108,7 @@ export function buildModelHistory(params: {
       content: `长期记忆档案（据此延续对话，无需向用户复述档案内容）：\n${params.memoryFile}`
     });
   }
-  result.push(...recents);
+  result.push(...recents.map(withTimestampPrefix));
   return result;
 }
 
@@ -118,6 +146,8 @@ export async function runChat(opts: {
   sceneId?: CompanionSceneId;
   styleId?: ResponseStyleId;
   adultVerified?: boolean;
+  /** 来源渠道：网页端 web / Telegram 端 tg（用于统计分渠道计数） */
+  channel?: "web" | "tg";
 }): Promise<ChatResult> {
   const sessionId = (opts.sessionId && String(opts.sessionId).trim()) || makeSessionId();
   const message = String(opts.message || "").trim();
@@ -148,6 +178,22 @@ export async function runChat(opts: {
     systemMessages.push(buildStyleSystemMessage(style));
   }
 
+  // B4：跨会话时间锚点——让数字人感知"上次聊天发生在何时"，并刷新本次聊天时间为真实时刻
+  const memBefore = await getUserMemory(character.id);
+  if (memBefore.lastChatAt) {
+    const lastStr = formatMsgTimestamp(Date.parse(memBefore.lastChatAt));
+    systemMessages.push({
+      role: "system",
+      content: `【对话时间锚点】你与用户的上一次聊天发生在 ${lastStr}。若用户提及"上次/昨天/前天"等，以此为参照，不要臆造时间。`
+    });
+  }
+  // B 类长期记忆（提升为 A 类：后端统一注入，TG 与非流式网页端均生效，双端一致）
+  const memoryContent = formatUserMemorySystemContent(memBefore, character.name);
+  if (memoryContent) {
+    systemMessages.push({ role: "system", content: memoryContent });
+  }
+  await saveUserMemory(character.id, { ...memBefore, lastChatAt: new Date().toISOString() });
+
   // 总结模式下只把「记忆档案 + 最近窗口」发给模型，避免短上下文模型超限
   const modelHistory = buildModelHistory({
     history,
@@ -167,6 +213,10 @@ export async function runChat(opts: {
   await appendToSession(sessionId, { role: "user", content: message }, nextContext);
   markUserActivity(character.id); // 用户主动发消息 → 标记活跃，抑制主动推送
   const saved = await appendToSession(sessionId, { role: "assistant", content: answer.text }, nextContext);
+  recordChat(character.id, opts.channel ?? "web"); // 统计：每轮 user 消息 +1（分渠道）
+  // 统计：LLM token 消耗与 API 请求次数（仅真实 LLM 请求计入，本地兜底不计入）
+  if (answer.calledApi) recordApiCall(character.id, opts.channel ?? "web");
+  if (answer.usage) recordToken(character.id, opts.channel ?? "web", answer.usage.promptTokens, answer.usage.completionTokens);
 
   // 总结模式：回合结束后按需重新生成记忆档案（记忆随对话持续压缩更新）
   if (summaryMode) {

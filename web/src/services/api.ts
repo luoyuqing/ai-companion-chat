@@ -1179,6 +1179,59 @@ export async function resetPromptSettings(): Promise<SystemSettings> {
   return settingsRequest<SystemSettings>("/api/settings/prompts/reset", { method: "POST", body: "{}" });
 }
 
+// ---------- 聊天统计 ----------
+export interface StatsChannelCount {
+  web: number;
+  tg: number;
+}
+
+export interface TokenCount {
+  input: number;
+  output: number;
+}
+
+export interface CharacterStat {
+  id: string;
+  chat: StatsChannelCount;
+  photo: StatsChannelCount;
+  /** 每日聊天轮次（日期 YYYY-MM-DD → 次数），用于折线图 */
+  dailyChat: Record<string, number>;
+  /** LLM token 消耗（输入/输出） */
+  tokens: TokenCount;
+  /** LLM API 请求次数，分渠道 */
+  apiCalls: StatsChannelCount;
+  /** 每日 LLM token 消耗（日期 YYYY-MM-DD → {input,output}），用于折线图 */
+  dailyToken: Record<string, TokenCount>;
+  /** 每日 LLM API 请求次数（日期 YYYY-MM-DD → 分渠道），用于趋势图 */
+  dailyApi: Record<string, StatsChannelCount>;
+}
+
+export interface StatsOverview {
+  totalChat: number;
+  totalPhoto: number;
+  totalTokenInput: number;
+  totalTokenOutput: number;
+  totalApi: number;
+  characters: CharacterStat[];
+}
+
+export async function fetchStatsOverview(): Promise<StatsOverview> {
+  return settingsRequest<StatsOverview>("/api/settings/stats/overview");
+}
+
+export async function resetCharacterStatsApi(id: string): Promise<{ ok: boolean }> {
+  return settingsRequest<{ ok: boolean }>(`/api/settings/stats/reset/${encodeURIComponent(id)}`, {
+    method: "POST",
+    body: "{}"
+  });
+}
+
+export async function deleteCharacterStatsApi(id: string): Promise<{ ok: boolean }> {
+  return settingsRequest<{ ok: boolean }>(`/api/settings/stats/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function restartService(): Promise<{ ok: boolean; message: string }> {
   return settingsRequest<{ ok: boolean; message: string }>("/api/settings/restart-service", {
     method: "POST",

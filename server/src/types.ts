@@ -7,6 +7,8 @@ export type AvatarRenderMode = "image" | "video";
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  /** 消息写入时间（Unix 毫秒），由 appendToSession 自动附加，用于让模型感知历史消息的真实发生时刻。 */
+  ts?: number;
 }
 
 export type RelationshipAffinity = "new" | "warm" | "close" | "intimate";

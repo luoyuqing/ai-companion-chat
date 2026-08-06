@@ -442,26 +442,8 @@ function hasUserMemory(memory: UserMemory): boolean {
   );
 }
 
-function buildUserMemorySystemMessage(memory: UserMemory, character?: DigitalHuman): Message | null {
-  const normalized = normalizeUserMemory(memory);
-  if (!hasUserMemory(normalized)) return null;
-
-  const lines = [
-    "长期记忆：以下是用户主动保存给数字人的资料，回答时自然使用，不要逐条复述。",
-    normalized.displayName ? `用户自称：${normalized.displayName}` : "",
-    normalized.preferredName ? `希望数字人称呼用户：${normalized.preferredName}` : "",
-    normalized.preferences ? `聊天偏好：${normalized.preferences}` : "",
-    normalized.importantFacts ? `重要事实：${normalized.importantFacts}` : "",
-    normalized.boundaries ? `聊天禁忌或边界：${normalized.boundaries}` : "",
-    normalized.relationshipNotes ? `关系备注：${normalized.relationshipNotes}` : "",
-    character?.name ? `当前数字人：${character.name}` : ""
-  ].filter(Boolean);
-
-  return {
-    role: "system",
-    content: lines.join("\n")
-  };
-}
+// B 类长期记忆（聊天偏好等 6 字段）已于 2026-08-05 提升为 A 类，改由后端 runChat / /api/chat/stream 统一注入，
+// 前端不再透传，避免网页端与后端重复注入。参考 server/src/services/userMemory.ts 的 formatUserMemorySystemContent。
 
 function isCompanionSceneId(value: unknown): value is CompanionSceneId {
   return typeof value === "string" && companionScenes.some((scene) => scene.id === value);
@@ -1436,8 +1418,8 @@ export function ChatPanel({
     }));
     const requestScene = sceneOverride || activeScene;
     const sceneMessage = buildSceneSystemMessage(requestScene, activeCharacter, adultVerified || adultOverride);
-    const memoryMessage = buildUserMemorySystemMessage(userMemory, activeCharacter);
-    const systemMessages = [sceneMessage, memoryMessage].filter(Boolean) as ApiHistoryMessage[];
+    // B 类长期记忆改由后端统一注入（双端一致），前端不再透传，避免重复注入
+    const systemMessages = [sceneMessage].filter(Boolean) as ApiHistoryMessage[];
     const nextHistory: ApiHistoryMessage[] = [...systemMessages, ...visibleHistory];
 
     setState((prev) => ({ ...prev, messages: [...prev.messages, userBubble], emotion: preEmotion }));
