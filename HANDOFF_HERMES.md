@@ -2,15 +2,15 @@
 
 ## Repository
 
-- GitHub repo: https://github.com/MoKangMedical/digital-girlfriend
-- Live GitHub Pages: https://mokangmedical.github.io/digital-girlfriend/
+- GitHub repo: https://github.com/luoyuqing/ai-companion-chat
+- Live GitHub Pages: https://luoyuqing.github.io/ai-companion-chat/
 - Product feature commit before this handoff document: `97c13817eb888bf106fcef846e936d1746a2b8bc`
-- Latest verified Pages workflow before this handoff file: https://github.com/MoKangMedical/digital-girlfriend/actions/runs/27057945427
+- Latest verified Pages workflow before this handoff file: https://github.com/luoyuqing/ai-companion-chat/actions/runs/27057945427
 
 ## Clone And Run
 
 ```bash
-git clone https://github.com/MoKangMedical/digital-girlfriend.git
+git clone https://github.com/luoyuqing/ai-companion-chat.git
 cd digital-girlfriend
 npm install
 npm run build:web
@@ -95,7 +95,7 @@ These are not local code blockers, but they are still required for a real public
 Use this prompt for another Hermes/Codex agent:
 
 ```text
-Continue from https://github.com/MoKangMedical/digital-girlfriend on main.
+Continue from https://github.com/luoyuqing/ai-companion-chat on dg-deploy.
 
 The product goal is a digital girlfriend site/app inspired by Anima-like companion products: custom digital humans, voice, Web/WeChat mini/iOS installability, long-term memory, relationship growth, real-time emotion/avatar changes, and natural romantic/flirty conversation.
 
