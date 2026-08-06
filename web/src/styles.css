@@ -2834,6 +2834,13 @@ select {
 .stats-card-name { font-size: 15px; font-weight: 600; color: #f3eefc; }
 .stats-card-metrics { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: rgba(240, 234, 255, 0.75); }
 .stats-card-metrics b { color: #fff; font-size: 15px; }
+.stats-metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.stats-metric-card { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stats-metric-label { font-size: 12px; color: rgba(240, 234, 255, 0.55); }
+.stats-metric-value { font-size: 22px; font-weight: 500; color: #fff; line-height: 1.1; }
+.stats-metric-sub { font-size: 11px; color: rgba(240, 234, 255, 0.5); }
+.stats-card-photo { font-size: 13px; color: rgba(240, 234, 255, 0.75); margin-top: 2px; }
+.stats-card-photo b { color: #fff; font-size: 15px; }
 .stats-card-sub { color: rgba(240, 234, 255, 0.5); font-size: 12px; }
 .stats-card-actions { display: flex; gap: 8px; }
 .stats-card-actions .ghost-btn { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: rgba(240, 234, 255, 0.8); cursor: pointer; font-family: inherit; }
@@ -2841,12 +2848,15 @@ select {
 .stats-card-actions .ghost-btn.danger { color: #ff8f9e; border-color: rgba(255, 143, 158, 0.4); }
 .stats-card-actions .ghost-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.stats-card-chart { margin-top: 4px; background: rgba(0, 0, 0, 0.18); border-radius: 10px; padding: 8px; }
+.stats-card-chart { margin-top: 8px; background: rgba(0, 0, 0, 0.18); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .stats-chart { width: 100%; height: auto; aspect-ratio: 600 / 170; display: block; }
 .stats-grid { stroke: rgba(255, 255, 255, 0.06); stroke-width: 1; }
 .stats-area { fill: rgba(255, 122, 162, 0.10); stroke: none; }
 .stats-line { stroke: #ff7aa2; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .stats-dot { fill: #ff7aa2; }
+.stats-area-api { fill: rgba(16, 185, 129, 0.10); stroke: none; }
+.stats-line-api { stroke: #10b981; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.stats-dot-api { fill: #10b981; }
 .stats-axis { fill: rgba(240, 234, 255, 0.45); font-size: 9px; font-weight: 400; }
 .stats-axis-y { font-size: 9px; fill: rgba(240, 234, 255, 0.35); }
 .stats-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(240, 234, 255, 0.6); margin-bottom: 4px; }

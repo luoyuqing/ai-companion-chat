@@ -41,6 +41,8 @@ export interface CharacterStat {
   apiCalls: ChannelCount;
   /** 每日 LLM token 消耗（按 Asia/Shanghai 日期 YYYY-MM-DD 为键），用于折线图 */
   dailyToken: Record<string, TokenCount>;
+  /** 每日 LLM API 请求次数（按 Asia/Shanghai 日期 YYYY-MM-DD 为键，分渠道），用于趋势图；无历史回填 */
+  dailyApi: Record<string, ChannelCount>;
 }
 
 export interface StatsData {
@@ -104,6 +106,7 @@ function loadStats(): StatsData {
         c.apiCalls = c.apiCalls || emptyChannelCount();
         c.dailyChat = c.dailyChat || {};
         c.dailyToken = c.dailyToken || {};
+        c.dailyApi = c.dailyApi || {};
       }
       cache = {
         version: parsed.version ?? 1,
@@ -141,14 +144,16 @@ function ensureChar(data: StatsData, id: string): CharacterStat {
       tokens: emptyTokenCount(),
       apiCalls: emptyChannelCount(),
       dailyChat: {},
-      dailyToken: {}
+      dailyToken: {},
+      dailyApi: {}
     };
     data.characters[id] = c;
   } else {
-    // 兼容旧数据（升级前 stats.json 无 tokens/apiCalls/dailyToken）
+    // 兼容旧数据（升级前 stats.json 无 tokens/apiCalls/dailyToken/dailyApi）
     if (!c.tokens) c.tokens = emptyTokenCount();
     if (!c.apiCalls) c.apiCalls = emptyChannelCount();
     if (!c.dailyToken) c.dailyToken = {};
+    if (!c.dailyApi) c.dailyApi = {};
   }
   return c;
 }
@@ -243,12 +248,15 @@ export function recordToken(characterId: string, channel: Channel, input: number
   saveStats(data);
 }
 
-/** 记录一次 LLM API 请求（每轮聊天 1 次）。 */
+/** 记录一次 LLM API 请求（每轮聊天 1 次）。同时按 Asia/Shanghai 日期累加每日请求数（分渠道），用于趋势图。 */
 export function recordApiCall(characterId: string, channel: Channel): void {
   if (!characterId) return;
   const data = loadStats();
   const c = ensureChar(data, characterId);
   c.apiCalls[channel] += 1;
+  const key = todayKey();
+  if (!c.dailyApi[key]) c.dailyApi[key] = emptyChannelCount();
+  c.dailyApi[key][channel] += 1;
   saveStats(data);
 }
 
@@ -263,7 +271,8 @@ export function getStatsOverview(): StatsOverview {
       tokens: c.tokens,
       apiCalls: c.apiCalls,
       dailyChat: c.dailyChat,
-      dailyToken: c.dailyToken
+      dailyToken: c.dailyToken,
+      dailyApi: c.dailyApi
     };
   });
   let totalChat = 0;
@@ -291,7 +300,8 @@ export function resetCharacterStats(characterId: string): void {
     tokens: emptyTokenCount(),
     apiCalls: emptyChannelCount(),
     dailyChat: {},
-    dailyToken: {}
+    dailyToken: {},
+    dailyApi: {}
   };
   saveStats(data);
 }

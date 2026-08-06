@@ -697,6 +697,7 @@ interface StatsRow {
   tokens: TokenCount;
   apiCalls: StatsChannelCount;
   dailyToken: Record<string, TokenCount>;
+  dailyApi: Record<string, StatsChannelCount>;
 }
 
 function fmtDate(d: Date): string {
@@ -743,6 +744,29 @@ function buildTokenSeries(
     d.setDate(today.getDate() - i);
     const key = fmtDate(d);
     out.push({ date: key, input: dailyToken[key]?.input || 0, output: dailyToken[key]?.output || 0 });
+  }
+  return out;
+}
+
+/** 根据区间构造每日 API 请求序列（网页+TG 求和，升序）；7/30 天强制补齐缺失日期为 0。 */
+function buildApiSeries(
+  dailyApi: Record<string, StatsChannelCount>,
+  range: StatsRange
+): Array<{ date: string; count: number }> {
+  if (range === "all") {
+    return Object.keys(dailyApi)
+      .sort()
+      .map((date) => ({ date, count: (dailyApi[date]?.web || 0) + (dailyApi[date]?.tg || 0) }));
+  }
+  const days = range === "7" ? 7 : 30;
+  const out: Array<{ date: string; count: number }> = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = fmtDate(d);
+    const t = dailyApi[key];
+    out.push({ date: key, count: (t?.web || 0) + (t?.tg || 0) });
   }
   return out;
 }
@@ -794,6 +818,58 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
         </text>
       ))}
     </svg>
+  );
+}
+
+function StatsChartApi({ series }: { series: Array<{ date: string; count: number }> }) {
+  const W = 600;
+  const H = 170;
+  const padL = 30;
+  const padR = 14;
+  const padT = 14;
+  const padB = 30;
+  const n = series.length;
+  const maxCount = Math.max(1, ...series.map((s) => s.count));
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const xAt = (i: number) => (n <= 1 ? padL + plotW / 2 : padL + (plotW * i) / (n - 1));
+  const yAt = (c: number) => padT + plotH - (c / maxCount) * plotH;
+  const linePath =
+    n <= 1
+      ? ""
+      : series.map((s, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(s.count).toFixed(1)}`).join(" ");
+  const areaPath =
+    n <= 1
+      ? ""
+      : `${linePath} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
+  const tickCount = n <= 8 ? n : 7;
+  const labelIdx =
+    n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
+  return (
+    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日 API 请求折线图">
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
+      {areaPath ? <path d={areaPath} className="stats-area-api" /> : null}
+      {linePath ? <path d={linePath} className="stats-line-api" fill="none" vectorEffect="non-scaling-stroke" /> : null}
+      {series.map((s, i) => (
+        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot-api" vectorEffect="non-scaling-stroke" />
+      ))}
+      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
+      {labelIdx.map((i) => (
+        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
+          {series[i].date.slice(5)}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+function StatsLegendApi() {
+  return (
+    <div className="stats-legend">
+      <span className="stats-legend-dot" style={{ background: "#10b981" }} />
+      每日 API 请求（绿）
+    </div>
   );
 }
 
@@ -906,7 +982,8 @@ function StatsTab({
       dailyChat: s?.dailyChat ?? {},
       tokens: s?.tokens ?? { input: 0, output: 0 },
       apiCalls: s?.apiCalls ?? { web: 0, tg: 0 },
-      dailyToken: s?.dailyToken ?? {}
+      dailyToken: s?.dailyToken ?? {},
+      dailyApi: s?.dailyApi ?? {}
     };
   });
   rows.sort((a, b) => b.chat.tg - a.chat.tg || b.chat.web - a.chat.web);
@@ -1031,6 +1108,8 @@ function StatsTab({
             const hasData = series.some((s) => s.count > 0);
             const tokenSeries = buildTokenSeries(row.dailyToken, range);
             const tokenHasData = tokenSeries.some((s) => s.input > 0 || s.output > 0);
+            const apiSeries = buildApiSeries(row.dailyApi, range);
+            const apiHasData = apiSeries.some((s) => s.count > 0);
             return (
               <div className={`stats-card ${expanded ? "expanded" : ""}`} key={row.id}>
                 <div className="stats-card-head">
@@ -1052,15 +1131,24 @@ function StatsTab({
                     </svg>
                   </button>
                 </div>
-                <div className="stats-card-metrics">
-                  <span>对话 <b>{totalChat}</b></span>
-                  <span>生图 <b>{totalPhoto}</b></span>
-                  <span className="stats-card-sub">网页 {row.chat.web} · TG {row.chat.tg}</span>
-                  <span>Token <b>{(row.tokens.input + row.tokens.output).toLocaleString()}</b></span>
-                  <span className="stats-card-sub">入 {row.tokens.input.toLocaleString()} · 出 {row.tokens.output.toLocaleString()}</span>
-                  <span>API <b>{row.apiCalls.web + row.apiCalls.tg}</b></span>
-                  <span className="stats-card-sub">网页 {row.apiCalls.web} · TG {row.apiCalls.tg}</span>
+                <div className="stats-metric-grid">
+                  <div className="stats-metric-card">
+                    <span className="stats-metric-label">对话轮次</span>
+                    <span className="stats-metric-value">{totalChat}</span>
+                    <span className="stats-metric-sub">网页 {row.chat.web} · TG {row.chat.tg}</span>
+                  </div>
+                  <div className="stats-metric-card">
+                    <span className="stats-metric-label">Token 消耗</span>
+                    <span className="stats-metric-value">{(row.tokens.input + row.tokens.output).toLocaleString()}</span>
+                    <span className="stats-metric-sub">入 {row.tokens.input.toLocaleString()} · 出 {row.tokens.output.toLocaleString()}</span>
+                  </div>
+                  <div className="stats-metric-card">
+                    <span className="stats-metric-label">API 请求</span>
+                    <span className="stats-metric-value">{row.apiCalls.web + row.apiCalls.tg}</span>
+                    <span className="stats-metric-sub">网页 {row.apiCalls.web} · TG {row.apiCalls.tg}</span>
+                  </div>
                 </div>
+                <div className="stats-card-photo">生图 <b>{totalPhoto}</b> <span className="stats-card-sub">（仅 Telegram 端）</span></div>
                 <div className="stats-card-actions">
                   <button type="button" className="ghost-btn" disabled={busy} onClick={() => setExpandedId(expanded ? null : row.id)}>
                     {expanded ? "收起趋势" : "查看趋势"}
@@ -1078,6 +1166,12 @@ function StatsTab({
                       <>
                         <StatsLegendDual />
                         <StatsChartDual series={tokenSeries} />
+                      </>
+                    ) : null}
+                    {apiHasData ? (
+                      <>
+                        <StatsLegendApi />
+                        <StatsChartApi series={apiSeries} />
                       </>
                     ) : null}
                   </div>

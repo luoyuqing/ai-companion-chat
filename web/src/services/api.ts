@@ -1202,6 +1202,8 @@ export interface CharacterStat {
   apiCalls: StatsChannelCount;
   /** 每日 LLM token 消耗（日期 YYYY-MM-DD → {input,output}），用于折线图 */
   dailyToken: Record<string, TokenCount>;
+  /** 每日 LLM API 请求次数（日期 YYYY-MM-DD → 分渠道），用于趋势图 */
+  dailyApi: Record<string, StatsChannelCount>;
 }
 
 export interface StatsOverview {
