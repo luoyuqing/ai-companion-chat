@@ -9,7 +9,7 @@ import { askAssistant, streamAssistant, StreamChunk } from "./services/llm";
 import { synthesizeSpeech } from "./services/tts";
 import { transcribeSpeechAudio } from "./services/transcription";
 import { inferEmotion } from "./services/emotion";
-import { appendToSession, buildSessionContext, clearSession, importSession, loadSession, updateSessionMeta } from "./services/session";
+import { appendToSession, buildSessionContext, clearSession, clearAllSessionsForCharacter, importSession, loadSession, updateSessionMeta } from "./services/session";
 import {
   AvatarRenderMode,
   ChatRequestBody,
@@ -688,6 +688,20 @@ app.delete("/api/session/:sessionId", async (req, res) => {
   const sessionId = String(req.params.sessionId || "");
   await clearSession(sessionId);
   res.json({ ok: true });
+});
+
+// 清除某数字人在「所有渠道」的聊天会话（网页 + 拥有者 TG + 主动推送 + 其它 TG 用户），
+// 回到刚新建时状态。不删除 user-memories（关系记忆/配置保留）。
+app.delete("/api/character/:characterId/sessions", async (req, res) => {
+  try {
+    const characterId = String(req.params.characterId || "").trim();
+    if (!characterId) return res.status(400).json({ error: "characterId required" });
+    const cleared = await clearAllSessionsForCharacter(characterId);
+    res.json({ ok: true, cleared });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "clear character sessions failed" });
+  }
 });
 
 // 导入（恢复）一份会话记忆：用于跨设备/跨服务器备份迁移

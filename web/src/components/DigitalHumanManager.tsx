@@ -18,8 +18,7 @@ import {
   UserMemory,
   createDigitalHuman,
   deleteDigitalHuman,
-  deleteUserMemory,
-  clearSessionHistory,
+  clearCharacterSessions,
   getUserMemory,
   resolveMediaUrl,
   saveUserMemory,
@@ -945,11 +944,10 @@ export function DigitalHumanManager({
     if (!c) return;
     setConfirmBusy(true);
     try {
-      // 仅清空与该数字人的聊天记录、会话上下文，以及聊天中产生的长期记忆；
-      // 数字人本身的配置（显示名 / 禁忌 / 偏好 / 人设）在 custom-humans.json，不在此处清除。
-      await clearSessionHistory(`mem-${c.id}`, c.id);
-      await deleteUserMemory(c.id);
-      notify?.(`已清除「${c.name}」的聊天记录与记忆，已重新开始聊天`, "success");
+      // 清除该数字人在「所有渠道」的聊天会话（网页 + 拥有者 TG + 主动推送 + 其它 TG 用户），
+      // 回到刚新建时状态；关系记忆/配置（user-memories）保留，不在此处清除。
+      const result = await clearCharacterSessions(c.id);
+      notify?.(`已清除「${c.name}」在 ${result.cleared.length} 个渠道的聊天记录，已重新开始聊天`, "success");
     } catch (error) {
       notify?.(error instanceof Error ? error.message : "清除记忆失败", "error");
     } finally {
@@ -1038,7 +1036,7 @@ export function DigitalHumanManager({
       <ConfirmDialog
         open={!!pendingClear}
         title="清除记忆"
-        message={`确定清除「${pendingClear?.name}」的聊天记录与记忆吗？\n将清空与该数字人的全部聊天记录和长期记忆（含 AI 在聊天中记住的内容），相当于重新开始聊天；数字人本身的配置（显示名 / 禁忌 / 偏好 / 人设）会保留。`}
+        message={`确定清除「${pendingClear?.name}」的聊天记录吗？\n将清空该数字人在所有渠道（网页端 + 全部 Telegram 会话 + 主动推送）的聊天记录和对话总结，相当于重新开始聊天；数字人本身的配置，以及你手动设置的关系记忆（关系备注 / 称呼 / 偏好 / 禁忌）都会完整保留。`}
         confirmText="清除记忆"
         danger
         busy={confirmBusy}

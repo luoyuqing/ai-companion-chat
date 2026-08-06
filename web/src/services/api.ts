@@ -780,6 +780,16 @@ export async function deleteUserMemory(characterId: string): Promise<void> {
   if (!res.ok) throw new Error("清除长期记忆失败");
 }
 
+// 清除某数字人在「所有渠道」的聊天会话（网页 + 拥有者 TG + 主动推送 + 其它 TG 用户），
+// 回到刚新建时状态；不删除 user-memories（关系记忆/配置保留）。
+export async function clearCharacterSessions(characterId: string): Promise<{ cleared: string[] }> {
+  const res = await fetch(`${API_BASE}/api/character/${encodeURIComponent(characterId)}/sessions`, {
+    method: "DELETE"
+  });
+  if (!res.ok) throw new Error("清除会话失败");
+  return (await res.json()) as { ok: boolean; cleared: string[] };
+}
+
 export async function uploadAvatarFile(params: {
   fileName: string;
   fileBase64: string;

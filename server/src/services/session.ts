@@ -247,6 +247,44 @@ export async function clearSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * 清除某数字人在「所有渠道」的会话文件，回到刚新建时的状态。
+ * - sessions/mem-<id>.json：网页端 + 拥有者本人 TG + 主动推送（三者共用该 key）
+ * - sessions/tg-<chatId>-<id>.json：其它 TG 用户的独立会话（每人一个文件）
+ * 不触碰 user-memories/<id>.json（关系记忆/配置由该文件承担，与聊天记录分离）。
+ * 返回被删除的 sessionId 列表，便于前端/日志核对。
+ */
+export async function clearAllSessionsForCharacter(characterId: string): Promise<string[]> {
+  const safeId = sanitizeSessionId(characterId);
+  const removed: string[] = [];
+
+  // 1) 网页 + 拥有者 TG + 主动推送共用的主会话
+  const mainFile = path.join(SESSION_DIR, `mem-${safeId}.json`);
+  await fs.rm(mainFile, { force: true });
+  removed.push(`mem-${safeId}`);
+
+  // 2) 枚举目录，删除所有其它 TG 用户的会话文件
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(SESSION_DIR);
+  } catch {
+    files = [];
+  }
+  const re = new RegExp(`^tg-.*-${escapeRegExp(safeId)}\\.json$`);
+  for (const name of files) {
+    if (re.test(name)) {
+      await fs.rm(path.join(SESSION_DIR, name), { force: true });
+      removed.push(name.replace(/\.json$/, ""));
+    }
+  }
+
+  return removed;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
  * 把一份记忆（历史 + 上下文）写回会话文件，用于跨设备/跨服务器的备份恢复。
  * 保留已有的 createdAt，updatedAt 刷新为当前时间；历史超出上限时截断最旧部分。
  */
