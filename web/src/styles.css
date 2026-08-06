@@ -2862,3 +2862,21 @@ select {
 .stats-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(240, 234, 255, 0.6); margin-bottom: 4px; }
 .stats-legend-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff7aa2; display: inline-block; flex: 0 0 auto; }
 .stats-empty { margin: 0; padding: 18px 0; text-align: center; font-size: 12.5px; color: rgba(240, 234, 255, 0.5); }
+
+/* 统计子标签页（总览 | 按数字人） */
+.stats-subtab { display: inline-flex; gap: 4px; padding: 3px; background: rgba(255, 255, 255, 0.06); border-radius: 10px; margin-bottom: 14px; }
+.stats-subtab button { border: none; background: transparent; color: rgba(240, 234, 255, 0.7); font-size: 13px; padding: 6px 18px; border-radius: 8px; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+.stats-subtab button:hover { color: #fff; }
+.stats-subtab button.active { background: linear-gradient(135deg, #a879ff, #7c5cff); color: #fff; box-shadow: 0 2px 8px rgba(124, 92, 255, 0.3); }
+.stats-range-row-top { margin-bottom: 14px; }
+
+/* 数字人卡片大照片封面（cover 填满裁切 + 无图兜底） */
+.stats-card-cover { position: relative; width: 100%; height: 150px; margin: -15px -15px 14px; border-radius: 12px 12px 0 0; overflow: hidden; background: linear-gradient(135deg, #2a2140, #3a2d5c); }
+.stats-card-cover-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stats-card-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 52px; font-weight: 700; color: rgba(255, 255, 255, 0.85); background: linear-gradient(135deg, #2a2140, #4a3a6c); }
+.stats-card-cover-overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 14px 12px; display: flex; align-items: center; gap: 10px; background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0)); }
+.stats-card-cover-overlay .stats-card-name { color: #fff; font-size: 17px; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6); }
+.stats-card-tg-badge { font-size: 11px; color: #34d399; background: rgba(16, 185, 129, 0.16); border: 1px solid rgba(16, 185, 129, 0.4); padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.stats-reset-icon-cover { position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.45); color: #fff; border: none; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; backdrop-filter: blur(4px); padding: 0; }
+.stats-reset-icon-cover:hover:not(:disabled) { background: rgba(255, 143, 158, 0.85); }
+.stats-reset-icon-cover:disabled { opacity: 0.4; cursor: not-allowed; }

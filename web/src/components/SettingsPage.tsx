@@ -951,6 +951,7 @@ function StatsTab({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmResetId, setConfirmResetId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [statsSubTab, setStatsSubTab] = useState<"overview" | "byHuman">("overview");
 
   async function load() {
     setLoading(true);
@@ -1008,6 +1009,17 @@ function StatsTab({
   }
   const overviewTokenSeries = buildTokenSeries(overviewDailyToken, range);
 
+  // 全部角色每日 API 请求合并（总览趋势图，复用各角色 dailyApi）
+  const overviewDailyApi: Record<string, StatsChannelCount> = {};
+  for (const row of rows) {
+    for (const date of Object.keys(row.dailyApi)) {
+      if (!overviewDailyApi[date]) overviewDailyApi[date] = { web: 0, tg: 0 };
+      overviewDailyApi[date].web += row.dailyApi[date].web;
+      overviewDailyApi[date].tg += row.dailyApi[date].tg;
+    }
+  }
+  const overviewApiSeries = buildApiSeries(overviewDailyApi, range);
+
   async function doReset(id: string) {
     setBusy(true);
     try {
@@ -1024,6 +1036,18 @@ function StatsTab({
 
   return (
     <div className="settings-body">
+      <div className="stats-subtab">
+        <button type="button" className={statsSubTab === "overview" ? "active" : ""} onClick={() => setStatsSubTab("overview")}>总览</button>
+        <button type="button" className={statsSubTab === "byHuman" ? "active" : ""} onClick={() => setStatsSubTab("byHuman")}>按数字人</button>
+      </div>
+      <div className="stats-range-row stats-range-row-top">
+        <div className="stats-range-btns">
+          <button type="button" className={range === "7" ? "active" : ""} onClick={() => setRange("7")}>近 7 天</button>
+          <button type="button" className={range === "30" ? "active" : ""} onClick={() => setRange("30")}>近 30 天</button>
+          <button type="button" className={range === "all" ? "active" : ""} onClick={() => setRange("all")}>全部</button>
+        </div>
+      </div>
+      {statsSubTab === "overview" ? (
       <section className="settings-section">
         <h3 className="settings-subtitle">总览</h3>
         <div className="stats-overview">
@@ -1081,20 +1105,21 @@ function StatsTab({
             <StatsChartDual series={overviewTokenSeries} />
           </div>
         ) : null}
+        {stats ? (
+          <div className="stats-overview-chart">
+            <StatsLegendApi />
+            <StatsChartApi series={overviewApiSeries} />
+          </div>
+        ) : null}
         <p className="settings-lock-tip">
           统计按「消息轮次」累计（每发一条消息 +1），生图仅 Telegram 端支持。Token 与 API 请求仅统计 LLM 文本调用（生图/语音不计入），且<strong>自功能上线起累计、无历史回填</strong>。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
         </p>
       </section>
+      ) : null}
 
+      {statsSubTab === "byHuman" ? (
       <section className="settings-section">
-        <div className="stats-range-row">
-          <h3 className="settings-subtitle">按数字人</h3>
-          <div className="stats-range-btns">
-            <button type="button" className={range === "7" ? "active" : ""} onClick={() => setRange("7")}>近 7 天</button>
-            <button type="button" className={range === "30" ? "active" : ""} onClick={() => setRange("30")}>近 30 天</button>
-            <button type="button" className={range === "all" ? "active" : ""} onClick={() => setRange("all")}>全部</button>
-          </div>
-        </div>
+        <h3 className="settings-subtitle">按数字人</h3>
 
         {loading ? <p className="settings-loading">正在加载统计...</p> : null}
         {error ? <p className="settings-error">{error}</p> : null}
@@ -1112,14 +1137,19 @@ function StatsTab({
             const apiHasData = apiSeries.some((s) => s.count > 0);
             return (
               <div className={`stats-card ${expanded ? "expanded" : ""}`} key={row.id}>
-                <div className="stats-card-head">
-                  <div className="stats-card-id">
-                    {row.avatarUrl ? <img src={row.avatarUrl} alt={row.name} className="stats-card-avatar" /> : null}
+                <div className="stats-card-cover">
+                  {row.avatarUrl ? (
+                    <img src={row.avatarUrl} alt={row.name} className="stats-card-cover-img" />
+                  ) : (
+                    <div className="stats-card-cover-empty">{row.name.slice(0, 1)}</div>
+                  )}
+                  <div className="stats-card-cover-overlay">
                     <div className="stats-card-name">{row.name}</div>
+                    {row.chat.tg > 0 ? <span className="stats-card-tg-badge">TG 活跃</span> : null}
                   </div>
                   <button
                     type="button"
-                    className="stats-reset-icon"
+                    className="stats-reset-icon stats-reset-icon-cover"
                     title="重置该数字人的统计"
                     aria-label="重置统计"
                     disabled={busy || totalChat === 0}
@@ -1181,6 +1211,7 @@ function StatsTab({
           })}
         </div>
       </section>
+      ) : null}
 
       <ConfirmDialog
         open={confirmResetId !== null}
