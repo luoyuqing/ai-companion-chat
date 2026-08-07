@@ -2863,6 +2863,47 @@ select {
 .stats-legend-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff7aa2; display: inline-block; flex: 0 0 auto; }
 .stats-empty { margin: 0; padding: 18px 0; text-align: center; font-size: 12.5px; color: rgba(240, 234, 255, 0.5); }
 
+/* 趋势图交互：悬停整列显示具体数值 */
+.stats-chart-wrap { position: relative; }
+/* 面积/折线/网格/坐标轴不拦截鼠标，仅热区列接收事件 */
+.stats-area, .stats-area-api, .stats-line, .stats-line-api, .stats-grid, .stats-axis, .stats-dot, .stats-dot-api { pointer-events: none; }
+.stats-hit { fill: transparent; pointer-events: all; cursor: pointer; }
+.stats-hover-ring { pointer-events: none; fill: none; stroke-width: 1.5; }
+.stats-guide { pointer-events: none; stroke: rgba(240, 234, 255, 0.28); stroke-width: 1; stroke-dasharray: 3 3; }
+
+.stats-tooltip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: rgba(28, 22, 45, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 7px 10px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  z-index: 5;
+  backdrop-filter: blur(6px);
+}
+.stats-tooltip.below { transform: translate(-50%, 12px); }
+.stats-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: rgba(28, 22, 45, 0.96);
+}
+.stats-tooltip.below::after {
+  top: auto;
+  bottom: 100%;
+  border-top-color: transparent;
+  border-bottom-color: rgba(28, 22, 45, 0.96);
+}
+.stats-tooltip-date { font-size: 11px; color: rgba(240, 234, 255, 0.62); margin-bottom: 3px; }
+.stats-tooltip-row { font-size: 12px; color: #fff; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.stats-tooltip-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+
 /* 统计子标签页（总览 | 按数字人） */
 .stats-subtab { display: inline-flex; gap: 4px; padding: 3px; background: rgba(255, 255, 255, 0.06); border-radius: 10px; margin-bottom: 14px; }
 .stats-subtab button { border: none; background: transparent; color: rgba(240, 234, 255, 0.7); font-size: 13px; padding: 6px 18px; border-radius: 8px; cursor: pointer; font-family: inherit; transition: all 0.15s; }

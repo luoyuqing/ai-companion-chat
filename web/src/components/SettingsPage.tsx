@@ -792,32 +792,85 @@ function StatsChart({ series }: { series: Array<{ date: string; count: number }>
     n <= 1
       ? ""
       : `${linePath} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
-
-  // 刻度：近 7 天显示每天，其余均匀取约 7 个，避免拥挤
   const tickCount = n <= 8 ? n : 7;
   const labelIdx =
     n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
 
+  // 悬停交互：按整列触发 tooltip（HTML overlay，不受 SVG 缩放影响）
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const tip =
+    hover === null
+      ? null
+      : (() => {
+          const wrapRect = wrapRef.current?.getBoundingClientRect();
+          const svgRect = svgRef.current?.getBoundingClientRect();
+          if (!wrapRect || !svgRect) return null;
+          const cx = xAt(hover);
+          const cy = yAt(series[hover].count);
+          const below = cy < padT + 18;
+          return {
+            px: cx * (svgRect.width / W) + (svgRect.left - wrapRect.left),
+            py: cy * (svgRect.height / H) + (svgRect.top - wrapRect.top),
+            below,
+            date: series[hover].date,
+            rows: [{ color: "#ff7aa2", text: `${series[hover].count} 轮对话` }]
+          };
+        })();
+  const colW = n <= 1 ? plotW : Math.max(10, (plotW / (n - 1)) * 0.9);
+
   return (
-    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日聊天折线图">
-      {/* 基准网格线 */}
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      {/* 面积填充 + 折线 */}
-      {areaPath ? <path d={areaPath} className="stats-area" /> : null}
-      {linePath ? <path d={linePath} className="stats-line" fill="none" vectorEffect="non-scaling-stroke" /> : null}
-      {series.map((s, i) => (
-        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot" vectorEffect="non-scaling-stroke" />
-      ))}
-      {/* Y 轴峰值标注 */}
-      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
-      {/* X 轴日期 */}
-      {labelIdx.map((i) => (
-        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
-          {series[i].date.slice(5)}
-        </text>
-      ))}
-    </svg>
+    <div className="stats-chart-wrap" ref={wrapRef}>
+      <svg
+        ref={svgRef}
+        className="stats-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="每日聊天折线图"
+        onMouseLeave={() => setHover(null)}
+      >
+        {/* 基准网格线 */}
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        {/* 面积填充 + 折线 */}
+        {areaPath ? <path d={areaPath} className="stats-area" /> : null}
+        {linePath ? <path d={linePath} className="stats-line" fill="none" vectorEffect="non-scaling-stroke" /> : null}
+        {series.map((s, i) => (
+          <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot" vectorEffect="non-scaling-stroke" />
+        ))}
+        {/* 悬停高亮环 + 垂直引导线 */}
+        {hover !== null ? (
+          <>
+            <line x1={xAt(hover)} y1={padT + plotH} x2={xAt(hover)} y2={yAt(series[hover].count)} className="stats-guide" vectorEffect="non-scaling-stroke" />
+            <circle cx={xAt(hover)} cy={yAt(series[hover].count)} r={5} className="stats-hover-ring" stroke="#ff7aa2" vectorEffect="non-scaling-stroke" />
+          </>
+        ) : null}
+        {/* 整列透明热区，便于悬停 */}
+        {series.map((s, i) => (
+          <rect key={`hit-${i}`} x={xAt(i) - colW / 2} y={padT} width={colW} height={plotH} className="stats-hit" onMouseEnter={() => setHover(i)} />
+        ))}
+        {/* Y 轴峰值标注 */}
+        <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
+        {/* X 轴日期 */}
+        {labelIdx.map((i) => (
+          <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
+            {series[i].date.slice(5)}
+          </text>
+        ))}
+      </svg>
+      {tip ? (
+        <div className={`stats-tooltip${tip.below ? " below" : ""}`} style={{ left: tip.px, top: tip.py }}>
+          <div className="stats-tooltip-date">{tip.date}</div>
+          {tip.rows.map((r, k) => (
+            <div className="stats-tooltip-row" key={k}>
+              <span className="stats-tooltip-dot" style={{ background: r.color }} />
+              {r.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -845,22 +898,75 @@ function StatsChartApi({ series }: { series: Array<{ date: string; count: number
   const tickCount = n <= 8 ? n : 7;
   const labelIdx =
     n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const tip =
+    hover === null
+      ? null
+      : (() => {
+          const wrapRect = wrapRef.current?.getBoundingClientRect();
+          const svgRect = svgRef.current?.getBoundingClientRect();
+          if (!wrapRect || !svgRect) return null;
+          const cx = xAt(hover);
+          const cy = yAt(series[hover].count);
+          const below = cy < padT + 18;
+          return {
+            px: cx * (svgRect.width / W) + (svgRect.left - wrapRect.left),
+            py: cy * (svgRect.height / H) + (svgRect.top - wrapRect.top),
+            below,
+            date: series[hover].date,
+            rows: [{ color: "#10b981", text: `${series[hover].count} 次 API 请求` }]
+          };
+        })();
+  const colW = n <= 1 ? plotW : Math.max(10, (plotW / (n - 1)) * 0.9);
+
   return (
-    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日 API 请求折线图">
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      {areaPath ? <path d={areaPath} className="stats-area-api" /> : null}
-      {linePath ? <path d={linePath} className="stats-line-api" fill="none" vectorEffect="non-scaling-stroke" /> : null}
-      {series.map((s, i) => (
-        <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot-api" vectorEffect="non-scaling-stroke" />
-      ))}
-      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
-      {labelIdx.map((i) => (
-        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
-          {series[i].date.slice(5)}
-        </text>
-      ))}
-    </svg>
+    <div className="stats-chart-wrap" ref={wrapRef}>
+      <svg
+        ref={svgRef}
+        className="stats-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="每日 API 请求折线图"
+        onMouseLeave={() => setHover(null)}
+      >
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        {areaPath ? <path d={areaPath} className="stats-area-api" /> : null}
+        {linePath ? <path d={linePath} className="stats-line-api" fill="none" vectorEffect="non-scaling-stroke" /> : null}
+        {series.map((s, i) => (
+          <circle key={i} cx={xAt(i)} cy={yAt(s.count)} r={n > 40 ? 1.0 : 2.0} className="stats-dot-api" vectorEffect="non-scaling-stroke" />
+        ))}
+        {hover !== null ? (
+          <>
+            <line x1={xAt(hover)} y1={padT + plotH} x2={xAt(hover)} y2={yAt(series[hover].count)} className="stats-guide" vectorEffect="non-scaling-stroke" />
+            <circle cx={xAt(hover)} cy={yAt(series[hover].count)} r={5} className="stats-hover-ring" stroke="#10b981" vectorEffect="non-scaling-stroke" />
+          </>
+        ) : null}
+        {series.map((s, i) => (
+          <rect key={`hit-${i}`} x={xAt(i) - colW / 2} y={padT} width={colW} height={plotH} className="stats-hit" onMouseEnter={() => setHover(i)} />
+        ))}
+        <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxCount}</text>
+        {labelIdx.map((i) => (
+          <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
+            {series[i].date.slice(5)}
+          </text>
+        ))}
+      </svg>
+      {tip ? (
+        <div className={`stats-tooltip${tip.below ? " below" : ""}`} style={{ left: tip.px, top: tip.py }}>
+          <div className="stats-tooltip-date">{tip.date}</div>
+          {tip.rows.map((r, k) => (
+            <div className="stats-tooltip-row" key={k}>
+              <span className="stats-tooltip-dot" style={{ background: r.color }} />
+              {r.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -894,26 +1000,85 @@ function StatsChartDual({ series }: { series: Array<{ date: string; input: numbe
     n <= 1 ? "" : `${lineInput} L${xAt(n - 1).toFixed(1)} ${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
   const tickCount = n <= 8 ? n : 7;
   const labelIdx = n <= 1 ? [0] : Array.from({ length: tickCount }, (_, k) => Math.round((k * (n - 1)) / (tickCount - 1)));
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hover, setHover] = useState<number | null>(null);
+  const tip =
+    hover === null
+      ? null
+      : (() => {
+          const wrapRect = wrapRef.current?.getBoundingClientRect();
+          const svgRect = svgRef.current?.getBoundingClientRect();
+          if (!wrapRect || !svgRect) return null;
+          const cx = xAt(hover);
+          const cyIn = yAt(series[hover].input);
+          const cyOut = yAt(series[hover].output);
+          const cyTop = Math.min(cyIn, cyOut);
+          const below = cyTop < padT + 18;
+          return {
+            px: cx * (svgRect.width / W) + (svgRect.left - wrapRect.left),
+            py: cyTop * (svgRect.height / H) + (svgRect.top - wrapRect.top),
+            below,
+            date: series[hover].date,
+            rows: [
+              { color: "#8b5cf6", text: `输入 ${series[hover].input.toLocaleString()} token` },
+              { color: "#3b82f6", text: `输出 ${series[hover].output.toLocaleString()} token` }
+            ]
+          };
+        })();
+  const colW = n <= 1 ? plotW : Math.max(10, (plotW / (n - 1)) * 0.9);
+
   return (
-    <svg className="stats-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="每日 Token 折线图">
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
-      {areaInput ? <path d={areaInput} fill="rgba(139,92,246,0.12)" /> : null}
-      {lineInput ? <path d={lineInput} className="stats-line" fill="none" stroke="#8b5cf6" vectorEffect="non-scaling-stroke" /> : null}
-      {lineOutput ? <path d={lineOutput} className="stats-line" fill="none" stroke="#3b82f6" vectorEffect="non-scaling-stroke" /> : null}
-      {series.map((s, i) => (
-        <circle key={`i${i}`} cx={xAt(i)} cy={yAt(s.input)} r={n > 40 ? 1.0 : 2.0} fill="#8b5cf6" vectorEffect="non-scaling-stroke" />
-      ))}
-      {series.map((s, i) => (
-        <circle key={`o${i}`} cx={xAt(i)} cy={yAt(s.output)} r={n > 40 ? 1.0 : 2.0} fill="#3b82f6" vectorEffect="non-scaling-stroke" />
-      ))}
-      <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxVal}</text>
-      {labelIdx.map((i) => (
-        <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
-          {series[i].date.slice(5)}
-        </text>
-      ))}
-    </svg>
+    <div className="stats-chart-wrap" ref={wrapRef}>
+      <svg
+        ref={svgRef}
+        className="stats-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label="每日 Token 折线图"
+        onMouseLeave={() => setHover(null)}
+      >
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        <line x1={padL} y1={padT + plotH / 2} x2={W - padR} y2={padT + plotH / 2} className="stats-grid" vectorEffect="non-scaling-stroke" />
+        {areaInput ? <path d={areaInput} fill="rgba(139,92,246,0.12)" /> : null}
+        {lineInput ? <path d={lineInput} className="stats-line" fill="none" stroke="#8b5cf6" vectorEffect="non-scaling-stroke" /> : null}
+        {lineOutput ? <path d={lineOutput} className="stats-line" fill="none" stroke="#3b82f6" vectorEffect="non-scaling-stroke" /> : null}
+        {series.map((s, i) => (
+          <circle key={`i${i}`} cx={xAt(i)} cy={yAt(s.input)} r={n > 40 ? 1.0 : 2.0} fill="#8b5cf6" vectorEffect="non-scaling-stroke" />
+        ))}
+        {series.map((s, i) => (
+          <circle key={`o${i}`} cx={xAt(i)} cy={yAt(s.output)} r={n > 40 ? 1.0 : 2.0} fill="#3b82f6" vectorEffect="non-scaling-stroke" />
+        ))}
+        {hover !== null ? (
+          <>
+            <line x1={xAt(hover)} y1={padT + plotH} x2={xAt(hover)} y2={Math.min(yAt(series[hover].input), yAt(series[hover].output))} className="stats-guide" vectorEffect="non-scaling-stroke" />
+            <circle cx={xAt(hover)} cy={yAt(series[hover].input)} r={5} className="stats-hover-ring" stroke="#8b5cf6" vectorEffect="non-scaling-stroke" />
+            <circle cx={xAt(hover)} cy={yAt(series[hover].output)} r={5} className="stats-hover-ring" stroke="#3b82f6" vectorEffect="non-scaling-stroke" />
+          </>
+        ) : null}
+        {series.map((s, i) => (
+          <rect key={`hit-${i}`} x={xAt(i) - colW / 2} y={padT} width={colW} height={plotH} className="stats-hit" onMouseEnter={() => setHover(i)} />
+        ))}
+        <text x={padL} y={padT + 1} className="stats-axis stats-axis-y">{maxVal}</text>
+        {labelIdx.map((i) => (
+          <text key={i} x={xAt(i)} y={H - 8} className="stats-axis stats-axis-x" textAnchor="middle">
+            {series[i].date.slice(5)}
+          </text>
+        ))}
+      </svg>
+      {tip ? (
+        <div className={`stats-tooltip${tip.below ? " below" : ""}`} style={{ left: tip.px, top: tip.py }}>
+          <div className="stats-tooltip-date">{tip.date}</div>
+          {tip.rows.map((r, k) => (
+            <div className="stats-tooltip-row" key={k}>
+              <span className="stats-tooltip-dot" style={{ background: r.color }} />
+              {r.text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
