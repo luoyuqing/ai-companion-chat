@@ -372,7 +372,7 @@ function normalizeStoredContext(raw: unknown): ChatContext | undefined {
   };
 }
 
-function normalizeMemoryText(value: unknown, maxLength = 360): string {
+function normalizeMemoryText(value: unknown, maxLength = 2000): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim()

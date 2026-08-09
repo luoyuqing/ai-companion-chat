@@ -44,10 +44,10 @@ function normalize(raw: unknown): UserMemory {
   return {
     displayName: String(v.displayName || "").slice(0, 80),
     preferredName: String(v.preferredName || "").slice(0, 80),
-    preferences: String(v.preferences || "").slice(0, 360),
-    importantFacts: String(v.importantFacts || "").slice(0, 360),
-    boundaries: String(v.boundaries || "").slice(0, 360),
-    relationshipNotes: String(v.relationshipNotes || "").slice(0, 360),
+    preferences: String(v.preferences || "").slice(0, 2000),
+    importantFacts: String(v.importantFacts || "").slice(0, 2000),
+    boundaries: String(v.boundaries || "").slice(0, 2000),
+    relationshipNotes: String(v.relationshipNotes || "").slice(0, 2000),
     lastChatAt: typeof v.lastChatAt === "string" ? v.lastChatAt : "",
     updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : ""
   };
