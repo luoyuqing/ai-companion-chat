@@ -57,6 +57,7 @@ import {
   writeHumanOverrides
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
+import { resumeVideoTasks } from "./services/videoGen";
 import { startProactiveScheduler } from "./telegram/proactive";
 import { getUserMemory, saveUserMemory, deleteUserMemory, formatUserMemorySystemContent } from "./services/userMemory";
 import { publicSystemConfig, saveSystemConfig, getLlmConfig, resetPrompts, type SystemConfigInput } from "./core/config";
@@ -942,6 +943,8 @@ function launchTelegramBots(): void {
 }
 launchTelegramBots();
 startProactiveScheduler();
+// 重启后恢复在途视频任务（若存在），继续轮询并在完成时推送；使用任务内保存的 botToken 发送，不依赖 bot 实例就绪。
+resumeVideoTasks();
 
 // 首启从历史会话 best-effort 回填聊天统计（仅执行一次，幂等）
 try {

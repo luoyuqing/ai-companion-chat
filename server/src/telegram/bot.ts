@@ -34,6 +34,7 @@ import {
 import { synthesizeSpeech } from "../services/tts";
 import { transcribeSpeechAudio } from "../services/transcription";
 import { runPhotoTask, PhotoTimeoutError } from "../services/photoGen";
+import { startVideoTask, isVideoInFlight } from "../services/videoGen";
 import { recordPhoto } from "../services/stats";
 import { clearSession, appendToSession, importSession, loadSession, updateSessionMeta } from "../services/session";
 import { ChatMessage, DigitalHumanConfig, SessionContext } from "../types";
@@ -431,6 +432,54 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
       return true;
     }
     return false;
+  }
+
+  // 视频触发：用户「回复(replied)一张照片」即触发（无需触发词）。
+  // 回复文字/图片说明作为视频提示词来源；回复无有效文字 → 传空白提示词。
+  // 全局单在途锁：已有视频在途时回复「视频还在生成中，稍等～」。聊天不被阻塞。
+  async function tryVideoTrigger(ctx: BotContext): Promise<boolean> {
+    const reply = ctx.message?.reply_to_message;
+    const repliedPhotos = reply?.photo;
+    if (!repliedPhotos || repliedPhotos.length === 0) return false; // 不是「回复照片」
+    const lastReplied = repliedPhotos[repliedPhotos.length - 1];
+    if (!lastReplied) return false;
+    const repliedPhotoFileId = lastReplied.file_id;
+
+    // 回复内容：文字或图片说明（caption）
+    let userText = "";
+    if (ctx.message?.text) userText = ctx.message.text;
+    else if (ctx.message?.caption) userText = ctx.message.caption;
+
+    if (isVideoInFlight()) {
+      await ctx.reply("视频还在生成中，稍等～");
+      return true;
+    }
+
+    const character = await currentCharacter(ctx);
+    if (!character) {
+      await ctx.reply("请先用 /list 选择一个数字人再聊天。");
+      return true;
+    }
+    const sid = chatSessionId(ctx);
+    const session = await loadSession(sid);
+    const recent = (session?.history ?? []).slice(-12);
+
+    // 先回执，再异步发起（不阻塞，期间用户可正常聊天）
+    await ctx.reply("我一会儿拍视频，等5分钟后发你，先聊着～");
+    void startVideoTask({
+      api: ctx.api,
+      botToken,
+      chatId: ctx.chat!.id,
+      character,
+      repliedPhotoFileId,
+      userText,
+      recentMessages: recent,
+      sessionId: sid
+    }).catch((err) => {
+      console.error("[视频] 启动失败:", err);
+      // startVideoTask 内部在提交失败前已释放锁
+    });
+    return true;
   }
 
   // 拍照主流程（异步、不阻塞）：
@@ -1054,6 +1103,8 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         await ctx.reply("头像已更新。");
         return;
       }
+      // 回复照片 → 视频生成（放在头像上传判定之后，避免创建/编辑向导被劫持）
+      if (await tryVideoTrigger(ctx)) return;
       await ctx.reply("可发送 /new 或 /edit 时上传头像。");
     } catch (err) {
       console.error("photo handling failed:", err);
@@ -1182,6 +1233,9 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
         ctx.session.editField = undefined;
         return ctx.reply(`已更新${field === "name" ? "名字" : field === "description" ? "描述" : "头像"}。`);
       }
+
+      // ---------- 视频触发（回复照片，无需词，优先于拍照触发词）----------
+      if (await tryVideoTrigger(ctx)) return;
 
       // ---------- 拍照等待期拦截 + 触发词检测（文字/语音共用，见 tryPhotoTrigger）----------
       if (await tryPhotoTrigger(ctx, text)) return;
