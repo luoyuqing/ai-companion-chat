@@ -18,3 +18,12 @@ server/src/data/custom-humans.json
 # 服务端 loadHumanOverrides() 对文件缺失有 try/catch 兜底（返回空 overrides），新环境不受影响。
 server/src/data/human-overrides.json
 server/src/data/proactive-sent.json
+
+# release env (holds keys) — never commit
+.env.release
+
+# runtime data dir (owner.json etc.) — never commit
+server/data/
+
+# user/custom avatars — never commit
+web/public/assets/avatars/

@@ -97,7 +97,7 @@
         value="{{userMemory.importantFacts}}"
         data-field="importantFacts"
         bindinput="onMemoryInput"
-        placeholder="重要事实，例如：最近在做 AI伴聊 网站"
+        placeholder="重要事实，例如：最近在做数字女友网站"
       />
       <textarea
         class="memory-textarea"

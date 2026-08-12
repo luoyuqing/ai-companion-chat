@@ -72,7 +72,7 @@ async function resolveActiveBase() {
 }
 
 function makeTinyGlbBase64() {
-  const json = JSON.stringify({ asset: { version: "2.0", generator: "ai-companion-chat-verify" } });
+  const json = JSON.stringify({ asset: { version: "2.0", generator: "digital-girlfriend-verify" } });
   const paddedJson = json.padEnd(Math.ceil(json.length / 4) * 4, " ");
   const jsonBytes = new TextEncoder().encode(paddedJson);
   const totalLength = 12 + 8 + jsonBytes.length;
@@ -183,7 +183,7 @@ async function main() {
       body: JSON.stringify({
         name: `verify-loop-${Date.now()}`,
         description: "用于闭环验收",
-        avatarUrl: "/assets/avatars/linxingwan.svg",
+        avatarUrl: "/assets/avatars/lina.svg",
         modelUrl: uploadedModel.modelUrl,
         voiceProvider: "local",
         voice: "nova",

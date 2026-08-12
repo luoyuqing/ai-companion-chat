@@ -10,7 +10,7 @@ if (apiHost) {
 
 const config: CapacitorConfig = {
   appId: "com.digitalgirlfriend.demo",
-  appName: "AI伴聊",
+  appName: "数字女友",
   webDir: "../web/dist",
   server: serverConfig
 };

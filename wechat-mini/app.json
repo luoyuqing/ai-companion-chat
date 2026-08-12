@@ -1,7 +1,7 @@
 {
   "pages": ["pages/index/index"],
   "window": {
-    "navigationBarTitleText": "AI伴聊",
+    "navigationBarTitleText": "数字女友",
     "navigationBarBackgroundColor": "#0f1322",
     "navigationBarTextStyle": "white"
   },

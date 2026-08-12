@@ -5,7 +5,7 @@ const STORAGE_KEY_LOCAL_CONTEXT = "dg-mini-local-chat-context-v1";
 const STORAGE_KEY_AVATAR_RENDER_MODE = "dg-mini-avatar-render-mode";
 const STORAGE_KEY_USER_MEMORY = "dg-mini-user-memory-v1";
 const STORAGE_KEY_CHAT_STATES = "dg-mini-chat-states-v1";
-const EXPORT_SCHEMA = "ai-companion-chat-local-archive";
+const EXPORT_SCHEMA = "digital-girlfriend-local-archive";
 const CHAT_STATE_ARCHIVE_PREFIX = "dg-chat-state-v1";
 const MAX_STORED_MESSAGES = 80;
 
@@ -52,10 +52,10 @@ const emptyUserMemory = {
 
 const BUILT_IN_HUMANS = [
   {
-    id: "linxingwan",
-    name: "林星晚",
+    id: "lina",
+    name: "Lina",
     description: "默认数字人。温柔、开朗，默认可爱的笑容",
-    avatarUrl: "/assets/avatars/linxingwan.svg",
+    avatarUrl: "/assets/avatars/lina.svg",
     modelUrl: "",
     defaultMood: "happy",
     personalityTagline: "温柔可爱，既能认真陪伴，也会轻松撒娇。",
@@ -73,10 +73,10 @@ const BUILT_IN_HUMANS = [
     voiceProfile: { provider: "local", voice: "browser-zh-CN" }
   },
   {
-    id: "suwanqing",
-    name: "苏晚晴",
+    id: "moon",
+    name: "Moon",
     description: "成熟、细腻，偏感性表达",
-    avatarUrl: "/assets/avatars/suwanqing.svg",
+    avatarUrl: "/assets/avatars/moon.svg",
     modelUrl: "",
     defaultMood: "wink",
     personalityTagline: "成熟感性，善于用共情语言回应并引导对方放松表达。",
@@ -396,7 +396,7 @@ function normalizeImportedChatState(raw) {
 }
 
 function getArchiveChatStateKey(sessionId, characterId) {
-  return `${CHAT_STATE_ARCHIVE_PREFIX}:${encodeURIComponent(sessionId || "session-mini")}:${encodeURIComponent(characterId || "linxingwan")}`;
+  return `${CHAT_STATE_ARCHIVE_PREFIX}:${encodeURIComponent(sessionId || "session-mini")}:${encodeURIComponent(characterId || "lina")}`;
 }
 
 function readMiniChatStates() {
@@ -435,7 +435,7 @@ function normalizeImportedHumans(raw) {
         id,
         name,
         description: normalizeMemoryText(item.description || "导入的数字人", 300),
-        avatarUrl: normalizeMemoryText(item.avatarUrl || "/assets/avatars/linxingwan.svg", 500),
+        avatarUrl: normalizeMemoryText(item.avatarUrl || "/assets/avatars/lina.svg", 500),
         modelUrl: normalizeMemoryText(item.modelUrl, 500) || undefined,
         avatarType: item.avatarType === "video" ? "video" : "image",
         emotionProfile: normalizeEmotionProfile(item.emotionProfile),
@@ -514,7 +514,7 @@ function importMiniArchive(payload) {
     throw new Error("导入内容格式不正确");
   }
   if (payload.schema !== EXPORT_SCHEMA || payload.version !== 1) {
-    throw new Error("不是 AI伴聊 本地记录文件");
+    throw new Error("不是数字女友本地记录文件");
   }
 
   const importedHumans = normalizeImportedHumans(payload.localHumans);
@@ -927,9 +927,9 @@ Page({
     characters: [],
     characterNames: [],
     pickerIndex: 0,
-    characterId: "linxingwan",
-    characterName: "林星晚",
-    characterAvatar: "/assets/avatars/linxingwan.svg",
+    characterId: "lina",
+    characterName: "Lina",
+    characterAvatar: "/assets/avatars/lina.svg",
     characterModelUrl: "",
     avatarRenderMode: "3d",
     avatarRenderStatus: "3D模型未配置，显示2D表情",
@@ -944,7 +944,7 @@ Page({
     newHuman: {
       name: "",
       description: "",
-      avatarUrl: "/assets/avatars/linxingwan.svg",
+      avatarUrl: "/assets/avatars/lina.svg",
       modelUrl: "",
       voice: "nova",
       voiceProvider: "openai",
@@ -983,7 +983,7 @@ Page({
     const userMemory = readUserMemory();
     this.setData({
       sessionId,
-      characterId: cachedCharacter || "linxingwan",
+      characterId: cachedCharacter || "lina",
       avatarRenderMode: cachedAvatarRenderMode,
       userMemory,
       memoryActive: hasUserMemory(userMemory)
@@ -991,7 +991,7 @@ Page({
     this._recorderManager = wx.getRecorderManager();
     this._fileSystemManager = wx.getFileSystemManager();
     this._bindRecorderEvents();
-    this.fetchCharacters(cachedCharacter || "linxingwan");
+    this.fetchCharacters(cachedCharacter || "lina");
   },
 
   onUnload() {
@@ -1125,13 +1125,13 @@ Page({
 
   _applyCharacterList(list, preferredCharacterId) {
     const safeList = Array.isArray(list) && list.length > 0 ? list : getLocalHumans();
-    const pickId = preferredCharacterId || wx.getStorageSync(STORAGE_KEY_CHARACTER) || "linxingwan";
+    const pickId = preferredCharacterId || wx.getStorageSync(STORAGE_KEY_CHARACTER) || "lina";
     let pickerIndex = safeList.findIndex((item) => item.id === pickId);
     if (pickerIndex < 0) {
       pickerIndex = 0;
     }
     const selected = safeList[pickerIndex] || safeList[0];
-    const selectedId = selected?.id || "linxingwan";
+    const selectedId = selected?.id || "lina";
     const avatarRenderMode = this.data.avatarRenderMode || readAvatarRenderMode();
 
     this.setData({
@@ -1139,8 +1139,8 @@ Page({
       characterNames: safeList.map((item) => item.name || item.id),
       pickerIndex,
       characterId: selectedId,
-      characterName: selected?.name || selected?.id || "林星晚",
-      characterAvatar: resolveApiAsset(selected?.avatarUrl || "/assets/avatars/linxingwan.svg"),
+      characterName: selected?.name || selected?.id || "Lina",
+      characterAvatar: resolveApiAsset(selected?.avatarUrl || "/assets/avatars/lina.svg"),
       characterModelUrl: resolveModelUrl(selected?.modelUrl || ""),
       avatarRenderMode,
       avatarRenderStatus: resolveAvatarRenderStatus(selected, avatarRenderMode),
@@ -1209,7 +1209,7 @@ Page({
       pickerIndex,
       characterId: selected.id,
       characterName: selected.name || selected.id,
-      characterAvatar: resolveApiAsset(selected.avatarUrl || "/assets/avatars/linxingwan.svg"),
+      characterAvatar: resolveApiAsset(selected.avatarUrl || "/assets/avatars/lina.svg"),
       characterModelUrl: resolveModelUrl(selected.modelUrl || ""),
       avatarRenderStatus: resolveAvatarRenderStatus(selected, this.data.avatarRenderMode),
       conversationRelationshipMode: selected.relationshipMode || "sweet"
@@ -1232,7 +1232,7 @@ Page({
     saveLocalCustomHumans(getLocalCustomHumans().filter((item) => item.id !== id));
     const nextCharacters = this.data.characters.filter((item) => item.id !== id);
     const fallbackCharacters = nextCharacters.length > 0 ? nextCharacters : getLocalHumans();
-    this._applyCharacterList(fallbackCharacters, fallbackCharacters[0]?.id || "linxingwan");
+    this._applyCharacterList(fallbackCharacters, fallbackCharacters[0]?.id || "lina");
   },
 
   onDeleteCurrentHuman() {
@@ -1517,7 +1517,7 @@ Page({
     try {
       const result = importMiniArchive(JSON.parse(raw));
       const sessionId = result.sessionId || wx.getStorageSync(STORAGE_KEY_SESSION) || this.data.sessionId;
-      const selectedCharacterId = result.selectedCharacterId || wx.getStorageSync(STORAGE_KEY_CHARACTER) || this.data.characterId || "linxingwan";
+      const selectedCharacterId = result.selectedCharacterId || wx.getStorageSync(STORAGE_KEY_CHARACTER) || this.data.characterId || "lina";
       const avatarRenderMode = result.avatarRenderMode || readAvatarRenderMode();
       const userMemory = readUserMemory();
       this.setData({
@@ -1833,7 +1833,7 @@ Page({
       pickerIndex,
       characterId: created.id,
       characterName: created.name || created.id,
-      characterAvatar: resolveApiAsset(created.avatarUrl || "/assets/avatars/linxingwan.svg"),
+      characterAvatar: resolveApiAsset(created.avatarUrl || "/assets/avatars/lina.svg"),
       characterModelUrl: resolveModelUrl(created.modelUrl || ""),
       avatarRenderStatus: resolveAvatarRenderStatus(created, this.data.avatarRenderMode),
       conversationRelationshipMode: created.relationshipMode || "sweet",
@@ -1841,7 +1841,7 @@ Page({
       newHuman: {
         name: "",
         description: "",
-        avatarUrl: "/assets/avatars/linxingwan.svg",
+        avatarUrl: "/assets/avatars/lina.svg",
         modelUrl: "",
         voiceProvider: "openai",
         voice: "nova",
@@ -1863,7 +1863,7 @@ Page({
       id: `custom-mini-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`,
       name: String(payload.name || "").trim(),
       description: String(payload.description || "").trim(),
-      avatarUrl: String(payload.avatarUrl || "/assets/avatars/linxingwan.svg").trim(),
+      avatarUrl: String(payload.avatarUrl || "/assets/avatars/lina.svg").trim(),
       modelUrl: String(payload.modelUrl || "").trim() || undefined,
       avatarType: payload.avatarType === "video" ? "video" : "image",
       emotionProfile: emotionProfile || cloneJson(BUILT_IN_HUMANS[0].emotionProfile),

@@ -79,7 +79,7 @@ async function requestChat(apiBase) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: "先聊几句，测试下",
-      characterId: "linxingwan",
+      characterId: "lina",
       sessionId: `verify-${Date.now()}`,
       history: []
     })
@@ -101,7 +101,7 @@ async function requestChatStream(apiBase) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: "继续聊，我想听你更甜一点",
-      characterId: "linxingwan",
+      characterId: "lina",
       sessionId: `verify-stream-${Date.now()}`,
       history: []
     })
@@ -171,7 +171,7 @@ async function requestCreateHumanAndContext(apiBase) {
     body: JSON.stringify({
       name: `verify-${Date.now()}`,
       description: "自动化验收专用数字人",
-      avatarUrl: "/assets/avatars/linxingwan.svg",
+      avatarUrl: "/assets/avatars/lina.svg",
       voiceProvider: "local",
       voice: "nova",
       defaultMood: "neutral",

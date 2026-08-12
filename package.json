@@ -1,8 +1,7 @@
 {
-  "name": "ai-companion-chat",
+  "name": "digital-girlfriend-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "AI伴聊 · 可自托管的 AI 陪伴聊天平台：一套后端 API 覆盖 Web / 微信小程序 / iOS / Telegram。",
   "scripts": {
     "dev": "npm run dev --workspaces --if-present --parallel",
     "dev:all": "node ./scripts/dev-all.mjs",

@@ -74,7 +74,7 @@ async function rhSubmit(apiKey: string, fileName: string, prompt: string): Promi
         fieldValue: "3:4",
         description: "Ratio selection (Effective when the switch above is turned on)"
       },
-      { nodeId: "192", fieldName: "value", fieldValue: "false", description: "Gray image output (default Zip)" },
+      { nodeId: "192", fieldName: "value", fieldValue: "true", description: "Gray image output (default Zip)" },
       { nodeId: "195", fieldName: "text", fieldValue: prompt, description: "Prompt" }
     ],
     instanceType: "default",
@@ -288,20 +288,33 @@ export async function runPhotoTask(opts: {
     throw new PhotoTimeoutError(`生图超时（超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成）`);
   }
 
-  // 下载 ZIP → 解压 → 取首张图片
+  // 下载结果 → 判断真实格式（ZIP 压缩包 or 单张图片）→ 取图
+  // 注：RunningHub 在 node192="true" 时返回 ZIP 压缩包；若以后接口又改回单图直链，
+  // 这里按文件头 magic bytes 自适应，避免对图片误跑 unzip 导致全部失败。
   const tmpDir = path.join(os.tmpdir(), `dg-photo-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmpDir, { recursive: true });
-  const zipPath = path.join(tmpDir, "out.zip");
+  const rawPath = path.join(tmpDir, "raw");
   try {
-    await downloadFile(imageUrl, zipPath);
-    await execFileAsync("unzip", ["-o", zipPath, "-d", tmpDir]);
-    const img = findFirstImage(tmpDir);
-    if (!img) throw new Error("生图结果中未找到图片文件");
-    console.log(`${tag} 生图完成 本地图=${img} 总耗时=${((Date.now() - t0) / 1000).toFixed(1)}s`);
-    return {
-      imagePath: img,
-      cleanup: () => cleanupDir(tmpDir)
-    };
+    await downloadFile(imageUrl, rawPath);
+    const head = readFileSync(rawPath).slice(0, 4);
+    const isZip = head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04; // "PK\x03\x04"
+    if (isZip) {
+      await execFileAsync("unzip", ["-o", rawPath, "-d", tmpDir]);
+      const img = findFirstImage(tmpDir);
+      if (!img) throw new Error("生图结果中未找到图片文件");
+      console.log(`${tag} 生图完成(压缩包) 本地图=${img} 总耗时=${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      return { imagePath: img, cleanup: () => cleanupDir(tmpDir) };
+    }
+    // 单张图片：按 magic bytes 给正确扩展名后直接作为结果（不再 unzip）
+    const isJpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+    const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+    const isGif = head[0] === 0x47 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x38;
+    const isRiff = head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46; // webp 等
+    const ext = isJpeg ? "jpg" : isPng ? "png" : isGif ? "gif" : isRiff ? "webp" : "bin";
+    const imgPath = path.join(tmpDir, `out.${ext}`);
+    if (rawPath !== imgPath) writeFileSync(imgPath, readFileSync(rawPath));
+    console.log(`${tag} 生图完成(单图) 本地图=${imgPath} 总耗时=${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    return { imagePath: imgPath, cleanup: () => cleanupDir(tmpDir) };
   } catch (err) {
     cleanupDir(tmpDir);
     throw err;
