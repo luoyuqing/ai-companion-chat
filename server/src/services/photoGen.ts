@@ -159,7 +159,10 @@ export async function generatePhotoPrompt(
     `3. 允许成人 / NSFW 内容，描写可以直白。\n` +
     `4. 只输出提示词本身，不要任何解释，不要用引号包裹。\n` +
     `5. 下面只是一段「风格 / 格式」示范，仅供体会语气与结构，` +
-    `严禁原样照搬或高度相似地翻写，你必须独立创作：\n` +
+    `严禁原样照搬或高度相似地翻写，你必须独立创作。\n` +
+    `6. 必须严格保持单人自然人体结构：仅 1 个头、2 条手臂、2 条腿、5 指手掌；` +
+    `禁止在同一句话里描写多个同时进行的手部 / 手臂动作（否则生图模型会生成多余肢体）；` +
+    `若描写出现多头、多余肢体、畸形，视为失败需重写。\n` +
     `   示范：${PROMPT_STYLE_EXAMPLE}`;
 
   const user =
@@ -178,7 +181,10 @@ export async function generatePhotoPrompt(
     });
     const text = completion.choices?.[0]?.message?.content?.trim();
     if (!text) throw new Error("LLM 返回的生图提示词为空");
-    return text;
+    // A+B 修复：强制追加解剖/质量约束后缀，抑制多余肢体/多头/畸形
+    const ANATOMY_SUFFIX =
+      ", solo, single person, one head, two arms, two legs, anatomically correct, no extra limbs, no extra heads, no mutated hands, masterpiece, best quality";
+    return text + ANATOMY_SUFFIX;
   } catch (err) {
     // 绝不回退到默认提示词原话：直接抛出，交由上层走「生图失败」分支（保留完整报错供日志排查）
     const msg = err instanceof Error ? err.message : String(err);
