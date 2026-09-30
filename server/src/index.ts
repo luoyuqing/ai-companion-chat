@@ -57,6 +57,8 @@ import {
   writeHumanOverrides
 } from "./core/data";
 import { startTelegramBot } from "./telegram/bot";
+import { startMatrixBot } from "./matrix/bot";
+import { canStartMatrixChannel, canStartTelegramChannel, isMatrixGloballyEnabled, isTelegramGloballyEnabled } from "./core/channel";
 import { resumeVideoTasks } from "./services/videoGen";
 import { startProactiveScheduler } from "./telegram/proactive";
 import { getUserMemory, saveUserMemory, deleteUserMemory, formatUserMemorySystemContent } from "./services/userMemory";
@@ -119,8 +121,8 @@ app.use(express.json({ limit: "30mb" }));
 
 app.get("/api/digital-humans", async (_req, res) => {
   const humans = await getCharacters();
-  // 剥离敏感凭证：telegramBotToken 绝不返回给前端，避免泄露
-  const safe = humans.map(({ telegramBotToken, ...rest }) => rest);
+  // 剥离敏感凭证：telegramBotToken / matrixAccessToken 绝不返回给前端，避免泄露
+  const safe = humans.map(({ telegramBotToken, matrixAccessToken, ...rest }) => rest);
   res.json({ humans: safe });
 });
 
@@ -142,7 +144,13 @@ app.get("/api/settings", (_req, res) => {
 app.put("/api/settings", (req, res) => {
   const body = (req.body || {}) as SystemConfigInput;
   try {
-    saveSystemConfig({ llm: body.llm, tts: body.tts, runningHub: body.runningHub, prompts: body.prompts });
+    saveSystemConfig({
+      llm: body.llm,
+      tts: body.tts,
+      runningHub: body.runningHub,
+      channels: body.channels,
+      prompts: body.prompts
+    });
     res.json({ ...publicSystemConfig(), prompts: getPromptConfig() });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "保存设置失败" });
@@ -318,7 +326,12 @@ app.post("/api/digital-humans", async (req, res) => {
       telegramBotToken,
       chatTaboos,
       proactive,
-      location
+      location,
+      matrixEnabled,
+      matrixHomeserver,
+      matrixUserId,
+      matrixAccessToken,
+      matrixRoomId
     } = req.body as {
       name?: string;
       description?: string;
@@ -338,6 +351,11 @@ app.post("/api/digital-humans", async (req, res) => {
       personalityTagline?: string;
       relationshipMode?: DigitalHumanConfig["relationshipMode"];
       telegramBotToken?: string;
+      matrixEnabled?: boolean;
+      matrixHomeserver?: string;
+      matrixUserId?: string;
+      matrixAccessToken?: string;
+      matrixRoomId?: string;
       location?: unknown;
     };
 
@@ -370,6 +388,11 @@ app.post("/api/digital-humans", async (req, res) => {
       relationshipMode: ensureRelationshipMode(relationshipMode),
       defaultMood: ensureSupportedMood(defaultMood),
       telegramBotToken: telegramBotToken?.trim() || undefined,
+      matrixEnabled: matrixEnabled === true ? true : undefined,
+      matrixHomeserver: matrixHomeserver?.trim() || undefined,
+      matrixUserId: matrixUserId?.trim() || undefined,
+      matrixAccessToken: matrixAccessToken?.trim() || undefined,
+      matrixRoomId: matrixRoomId?.trim() || undefined,
       chatTaboos: chatTaboos?.trim() || undefined,
       proactive: normalizeProactive(proactive),
       location: normalizeLocation(location)
@@ -404,6 +427,20 @@ app.patch("/api/digital-humans/:id", async (req, res) => {
     if (typeof body.telegramBotToken === "string") {
       const t = body.telegramBotToken.trim();
       patch.telegramBotToken = t ? t : undefined;
+    }
+    // telegramEnabled：本角色 TG 渠道开关（缺省视为 true，见 core/channel.ts 兼容性约定）
+    if (typeof body.telegramEnabled === "boolean") patch.telegramEnabled = body.telegramEnabled;
+    // ---- Matrix 渠道（一角色一账号一房）----
+    if (typeof body.matrixEnabled === "boolean") patch.matrixEnabled = body.matrixEnabled;
+    if (typeof body.matrixHomeserver === "string") {
+      patch.matrixHomeserver = body.matrixHomeserver.trim() || undefined;
+    }
+    if (typeof body.matrixUserId === "string") patch.matrixUserId = body.matrixUserId.trim() || undefined;
+    if (typeof body.matrixRoomId === "string") patch.matrixRoomId = body.matrixRoomId.trim() || undefined;
+    // matrixAccessToken：提供非空串则更新；提供空串则清除（与 telegramBotToken 同策略，留空表示不修改）
+    if (typeof body.matrixAccessToken === "string") {
+      const t = body.matrixAccessToken.trim();
+      patch.matrixAccessToken = t ? t : undefined;
     }
     if (typeof body.chatTaboos === "string") {
       patch.chatTaboos = body.chatTaboos.trim() || undefined;
@@ -915,12 +952,22 @@ if (HOST) {
   });
 }
 
-// Telegram 机器人：单进程多实例。
-// 1) 若配置了 TELEGRAM_BOT_TOKEN，启动一个「通用入口」bot（支持 /select 切换角色）；
-// 2) 遍历所有配置了 telegramBotToken 的数字人，各启动一个独立专属 bot（一角色一机器人），
-//    角色间记忆按 characterId 隔离，互不影响。
+// ---------- 渠道启动 ----------
+// 双层开关生效规则：渠道实际启用 = 全局开关 AND 角色开关（判定逻辑集中在 core/channel.ts）。
+// TG 全局开关默认关闭（迁移 Matrix 后）；打开开关 + 重启即完整恢复 TG，代码零损耗。
+
 const tgToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+
+/**
+ * 启动 Telegram 渠道。
+ * 全局开关关闭时直接 return（grammy 不启动任何 polling）；
+ * 角色级再按 telegramEnabled（缺省视为 true）逐个过滤。
+ */
 function launchTelegramBots(): void {
+  if (!isTelegramGloballyEnabled()) {
+    console.log("[渠道] Telegram 全局开关已关闭（channels.telegramEnabled=false），跳过 TG bot 启动");
+    return;
+  }
   if (tgToken) {
     startTelegramBot(tgToken).catch((err) => {
       console.error("通用入口 Telegram bot 启动失败:", err);
@@ -929,21 +976,62 @@ function launchTelegramBots(): void {
   getCharacters()
     .then((characters) => {
       let launched = 0;
+      let skipped = 0;
       for (const c of characters) {
         if (c.telegramBotToken && c.telegramBotToken.trim()) {
+          if (!canStartTelegramChannel(c)) {
+            skipped++; // 角色级 TG 开关被关闭
+            continue;
+          }
           startTelegramBot(c.telegramBotToken.trim(), c.id).catch((err) => {
             console.error(`数字人「${c.name}」专属 bot 启动失败:`, err);
           });
           launched++;
         }
       }
-      if (launched > 0) console.log(`已启动 ${launched} 个专属数字人 bot`);
+      console.log(
+        `[渠道] 已启动 ${launched} 个专属数字人 TG bot` + (skipped > 0 ? `（${skipped} 个因角色开关关闭被跳过）` : "")
+      );
     })
     .catch((err) => console.error("加载数字人失败，无法启动专属 bot:", err));
 }
+
+/**
+ * 启动 Matrix 渠道（一角色一账号一私聊房间）。
+ * 角色需同时满足：全局开关开 + 角色 matrixEnabled=true + homeserver/accessToken 已配置。
+ * roomId 可留空 —— 首次启动会自动建房并回填到角色配置。
+ */
+function launchMatrixClients(): void {
+  if (!isMatrixGloballyEnabled()) {
+    console.log("[渠道] Matrix 全局开关已关闭（channels.matrixEnabled=false），跳过 Matrix 客户端启动");
+    return;
+  }
+  getCharacters()
+    .then(async (characters) => {
+      const targets = characters.filter((c) => canStartMatrixChannel(c));
+      if (targets.length === 0) {
+        console.log("[渠道] 没有已启用的 Matrix 角色（需在角色设置里开启并填写 accessToken）");
+        return;
+      }
+      // 错开启动，避免 5 个客户端瞬时并发建连（方案 11.3 的微优化）
+      for (let i = 0; i < targets.length; i++) {
+        const c = targets[i];
+        if (!c) continue;
+        if (i > 0) await new Promise((r) => setTimeout(r, 300));
+        startMatrixBot(c.id).catch((err) => {
+          console.error(`数字人「${c.name}」Matrix 渠道启动失败:`, err);
+        });
+      }
+      console.log(`[渠道] 正在启动 ${targets.length} 个数字人的 Matrix 渠道`);
+    })
+    .catch((err) => console.error("加载数字人失败，无法启动 Matrix 渠道:", err));
+}
+
 launchTelegramBots();
+launchMatrixClients();
 startProactiveScheduler();
-// 重启后恢复在途视频任务（若存在），继续轮询并在完成时推送；使用任务内保存的 botToken 发送，不依赖 bot 实例就绪。
+// 重启后恢复在途视频任务（若存在），继续轮询并在完成时推送；
+// 任务内已保存渠道投递目标（TG botToken/chatId 或 Matrix homeserver/roomId），不依赖任何客户端实例就绪。
 resumeVideoTasks();
 
 // 首启从历史会话 best-effort 回填聊天统计（仅执行一次，幂等）

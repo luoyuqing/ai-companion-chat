@@ -65,9 +65,23 @@ export interface DigitalHumanConfig {
   // 专属 Telegram 机器人 token：配置后该数字人会以独立 bot 身份运行（一角色一机器人）。
   // 注意：此字段为敏感凭证，后端在返回给前端的角色列表中会主动剥离，编辑时留空表示不修改。
   telegramBotToken?: string;
+  // 本角色 Telegram 渠道开关。⚠️ 缺省（undefined）必须视为 true：
+  // 老配置升级后无此字段，若按 false 处理会导致 TG 被静默关闭。生效需「全局 AND 角色」同时为真。
+  telegramEnabled?: boolean;
+  // 本角色 Matrix 渠道开关（默认 false：未配置 Matrix 的角色自动不启动客户端）。
+  matrixEnabled?: boolean;
+  // Matrix homeserver 地址（留空取全局默认 channels.matrixHomeserverDefault）。
+  matrixHomeserver?: string;
+  // Matrix 账号完整 id，如 "@dg-jiangrouyi:matrix.3585616.xyz"。
+  matrixUserId?: string;
+  // Matrix access_token（登录凭证）。敏感字段，返回前端时主动剥离，编辑时留空表示不修改。
+  matrixAccessToken?: string;
+  // home room（真正用于收发的私聊房间；主动推送也投递到此）。
+  // 留空 = 首次启动由 bot 自动建房并回填；留空且建房失败则本角色 Matrix 渠道不启动。
+  matrixRoomId?: string;
   // 聊天禁忌：约束主动生成内容与对话风格，生成主动消息时作为硬性边界。
   chatTaboos?: string;
-  // 主动推送配置：配置专属 TG bot 后，可让数字人主动给主人发消息。
+  // 主动推送配置：配置专属 TG bot 或 Matrix 账号后，可让数字人主动给主人发消息。
   proactive?: ProactiveConfig;
 }
 

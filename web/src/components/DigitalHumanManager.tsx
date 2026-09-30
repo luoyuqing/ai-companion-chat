@@ -96,6 +96,14 @@ interface NewCharacterForm {
   personalityTagline: string;
   relationshipMode: (typeof relationshipModes)[number];
   telegramBotToken: string;
+  // 渠道开关（生效 = 全局总开关 AND 本角色开关）
+  telegramEnabled: boolean;
+  matrixEnabled: boolean;
+  // Matrix 渠道配置（凭证留空 = 不修改）
+  matrixHomeserver: string;
+  matrixUserId: string;
+  matrixAccessToken: string;
+  matrixRoomId: string;
   location: CityLocation | null;
   proactive: {
     enabled: boolean;
@@ -126,6 +134,13 @@ function defaultForm(): NewCharacterForm {
     personalityTagline: "",
     relationshipMode: "sweet",
     telegramBotToken: "",
+    // 新建角色默认两条渠道都开：实际生效仍受全局总开关约束
+    telegramEnabled: true,
+    matrixEnabled: true,
+    matrixHomeserver: "",
+    matrixUserId: "",
+    matrixAccessToken: "",
+    matrixRoomId: "",
     location: null,
     proactive: { enabled: false, timePoints: [], mode: "always", voiceEnabled: false }
   };
@@ -154,6 +169,13 @@ function fromCharacter(c: DigitalHuman): NewCharacterForm {
       ? (c.relationshipMode as (typeof relationshipModes)[number])
       : "sweet",
     telegramBotToken: "",
+    // ⚠️ telegramEnabled 缺省视为 true：老角色若未显式关闭，升级后仍保持 TG 开启
+    telegramEnabled: c.telegramEnabled !== false,
+    matrixEnabled: Boolean(c.matrixEnabled),
+    matrixHomeserver: c.matrixHomeserver || "",
+    matrixUserId: c.matrixUserId || "",
+    matrixAccessToken: "",
+    matrixRoomId: c.matrixRoomId || "",
     location: c.location
       ? { province: c.location.province, city: c.location.city, latitude: c.location.latitude, longitude: c.location.longitude }
       : null,
@@ -224,6 +246,15 @@ function buildPayload(form: NewCharacterForm): CreateHumanRequest {
     personalityTagline: form.personalityTagline.trim(),
     relationshipMode: form.relationshipMode,
     telegramBotToken: form.telegramBotToken.trim() || undefined,
+    // 渠道开关：显式提交布尔值，避免"缺省 = true"的兼容语义把用户意图吃掉
+    telegramEnabled: form.telegramEnabled,
+    matrixEnabled: form.matrixEnabled,
+    // 这三个字段按原样提交：传空串 = 清空该配置（homeserver 清空后回落全局默认，roomId 清空后自动重建房）
+    matrixHomeserver: form.matrixHomeserver.trim(),
+    matrixUserId: form.matrixUserId.trim(),
+    matrixRoomId: form.matrixRoomId.trim(),
+    // 凭证留空必须"不出现该键"，否则会被后端当作清空处理
+    ...(form.matrixAccessToken.trim() ? { matrixAccessToken: form.matrixAccessToken.trim() } : {}),
     ...(form.location
       ? {
           location: {
@@ -450,8 +481,20 @@ function CharacterForm({
           // 记忆保存失败不影响数字人本身的创建/更新
         }
       }
-      const restartHint = form.telegramBotToken.trim()
-        ? "（已配置 TG Token，请到「重启服务」重启后生效）"
+      // 渠道相关改动（新增凭证 / 开关或 Matrix 配置变化）都需要重启进程才会生效，
+      // 因为 Matrix 客户端与 TG bot 都只在服务启动时拉起。
+      const channelConfigTouched =
+        Boolean(form.telegramBotToken.trim()) ||
+        Boolean(form.matrixAccessToken.trim()) ||
+        (mode === "edit" &&
+          Boolean(initial) &&
+          (form.telegramEnabled !== (initial!.telegramEnabled !== false) ||
+            form.matrixEnabled !== Boolean(initial!.matrixEnabled) ||
+            form.matrixHomeserver.trim() !== (initial!.matrixHomeserver || "") ||
+            form.matrixUserId.trim() !== (initial!.matrixUserId || "") ||
+            form.matrixRoomId.trim() !== (initial!.matrixRoomId || "")));
+      const restartHint = channelConfigTouched
+        ? "（渠道配置已变更，请到「重启服务」重启后生效）"
         : "";
       if (onSaved) {
         // 由父级在列表页展示成功提示并切回列表，避免表单卸载导致提示丢失
@@ -621,17 +664,91 @@ function CharacterForm({
           </label>
         </FormSection>
 
-        <FormSection title="连接与位置" desc="专属 Bot 与真实时间/天气">
+        <FormSection title="渠道" desc="Telegram / Matrix 双通道（生效 = 全局开关 AND 本角色开关）">
+          <div className="field dh-span-full">
+            <span className="field-label">Telegram 渠道</span>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={form.telegramEnabled}
+                onChange={(e) => setForm((p) => ({ ...p, telegramEnabled: e.target.checked }))}
+              />
+              启用 Telegram 渠道
+            </label>
+            <small className="field-hint">
+              需同时打开「设置 → 渠道」里的 Telegram 总开关，并把 Bot Token 填入下方输入框。
+            </small>
+          </div>
+
           <label className="field dh-span-full">
             <span className="field-label">Telegram 专属 Bot Token（可选）</span>
             <input
               value={form.telegramBotToken}
               onChange={(e) => setForm((p) => ({ ...p, telegramBotToken: e.target.value }))}
-              placeholder="配置后该数字人以独立 bot 运行；留空=不修改（编辑时清空保存=关闭）"
+              placeholder="配置后该数字人以独立 bot 运行；留空=不修改"
             />
-            <small>配置了专属 bot 才能开启主动推送。</small>
+            <small className="field-hint">配置了专属 bot 才能开启主动推送。留空表示保持原有 Token 不变。</small>
           </label>
 
+          <div className="field dh-span-full">
+            <span className="field-label">Matrix 渠道</span>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={form.matrixEnabled}
+                onChange={(e) => setForm((p) => ({ ...p, matrixEnabled: e.target.checked }))}
+              />
+              启用 Matrix 渠道
+            </label>
+            <small className="field-hint">
+              需同时打开「设置 → 渠道」里的 Matrix 总开关，并填写下方的账号与 Token。
+            </small>
+          </div>
+
+          <label className="field dh-span-full">
+            <span className="field-label">Matrix homeserver（留空取全局默认）</span>
+            <input
+              value={form.matrixHomeserver}
+              onChange={(e) => setForm((p) => ({ ...p, matrixHomeserver: e.target.value }))}
+              placeholder="例如 https://matrix.3585616.xyz"
+            />
+          </label>
+
+          <label className="field">
+            <span className="field-label">Matrix 账号 ID</span>
+            <input
+              value={form.matrixUserId}
+              onChange={(e) => setForm((p) => ({ ...p, matrixUserId: e.target.value }))}
+              placeholder="例如 @dg-jiangrouyi:matrix.3585616.xyz"
+            />
+            <small className="field-hint">必须带 @ 前缀与 :域名 后缀。</small>
+          </label>
+
+          <label className="field">
+            <span className="field-label">Matrix Access Token</span>
+            <input
+              type="password"
+              value={form.matrixAccessToken}
+              onChange={(e) => setForm((p) => ({ ...p, matrixAccessToken: e.target.value }))}
+              placeholder="留空保持不变"
+            />
+            <small className="field-hint">凭证不会回显到网页；留空即沿用已保存的 Token。</small>
+          </label>
+
+          <label className="field dh-span-full">
+            <span className="field-label">Matrix 房间 ID（home room）</span>
+            <input
+              value={form.matrixRoomId}
+              onChange={(e) => setForm((p) => ({ ...p, matrixRoomId: e.target.value }))}
+              placeholder="留空 = 首次启动自动建房并回填"
+            />
+            <small className="field-hint">
+              主动推送的投递目标。留空时数字人启动后会自动创建私聊房间并把房间 ID 写回这里。
+            </small>
+          </label>
+        </FormSection>
+
+        <FormSection title="位置" desc="感知真实时间 / 天气">
           <label className="field dh-span-full">
             <span className="field-label">所在城市（用于感知真实时间 / 天气）</span>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -944,8 +1061,9 @@ export function DigitalHumanManager({
     if (!c) return;
     setConfirmBusy(true);
     try {
-      // 清除该数字人在「所有渠道」的聊天会话（网页 + 拥有者 TG + 主动推送 + 其它 TG 用户），
+      // 清除该数字人在「所有渠道」的聊天会话（网页 + 拥有者 TG / Matrix 主人私聊 + 主动推送 + 其它 TG 用户），
       // 回到刚新建时状态；关系记忆/配置（user-memories）保留，不在此处清除。
+      // 注：Matrix 主人私聊与 TG 主人私聊共用同一个会话 id（mem-<角色id>），因此天然被一并清除。
       const result = await clearCharacterSessions(c.id);
       notify?.(`已清除「${c.name}」在 ${result.cleared.length} 个渠道的聊天记录，已重新开始聊天`, "success");
     } catch (error) {
@@ -996,6 +1114,8 @@ export function DigitalHumanManager({
                 <div className="dh-card-meta">
                   <span className="dh-meta-chip">{relationshipModeLabelMap[(c.relationshipMode || "sweet") as (typeof relationshipModes)[number]] || "甜蜜陪伴"}</span>
                   {c.proactive?.enabled ? <span className="dh-meta-chip active">主动推送</span> : null}
+                  {c.telegramEnabled !== false ? <span className="dh-meta-chip">TG</span> : null}
+                  {c.matrixEnabled ? <span className="dh-meta-chip active">Matrix</span> : null}
                 </div>
               </div>
               <div className="dh-card-actions">
@@ -1036,7 +1156,7 @@ export function DigitalHumanManager({
       <ConfirmDialog
         open={!!pendingClear}
         title="清除记忆"
-        message={`确定清除「${pendingClear?.name}」的聊天记录吗？\n将清空该数字人在所有渠道（网页端 + 全部 Telegram 会话 + 主动推送）的聊天记录和对话总结，相当于重新开始聊天；数字人本身的配置，以及你手动设置的关系记忆（关系备注 / 称呼 / 偏好 / 禁忌）都会完整保留。`}
+        message={`确定清除「${pendingClear?.name}」的聊天记录吗？\n将清空该数字人在所有渠道（网页端 + Telegram 全部会话 + Matrix 私聊 + 主动推送）的聊天记录和对话总结，相当于重新开始聊天；数字人本身的配置，以及你手动设置的关系记忆（关系备注 / 称呼 / 偏好 / 禁忌）都会完整保留。`}
         confirmText="清除记忆"
         danger
         busy={confirmBusy}

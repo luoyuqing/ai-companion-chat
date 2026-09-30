@@ -16,11 +16,13 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join } from "path";
 import { DATA_DIR } from "../core/data";
 
-export type Channel = "web" | "tg";
+export type Channel = "web" | "tg" | "matrix";
 
+// matrix 位对老 stats.json 是缺省键（标为可选以反映真实形态），读写一律经 ensureChannelCount 补齐。
 export interface ChannelCount {
   web: number;
   tg: number;
+  matrix?: number;
 }
 
 export interface TokenCount {
@@ -74,7 +76,19 @@ const STATS_FILE = join(DATA_DIR, "stats.json");
 const CURRENT_BACKFILL_VERSION = 3;
 
 function emptyChannelCount(): ChannelCount {
-  return { web: 0, tg: 0 };
+  return { web: 0, tg: 0, matrix: 0 };
+}
+
+/**
+ * 补齐 ChannelCount 的缺省渠道键（老 stats.json 无 matrix 位，直接 += 会得到 NaN）。
+ * 就地修改传入对象并返回，所有读写路径统一走这里。
+ */
+function ensureChannelCount(count: ChannelCount | undefined): ChannelCount {
+  if (!count) return emptyChannelCount();
+  if (typeof count.web !== "number") count.web = 0;
+  if (typeof count.tg !== "number") count.tg = 0;
+  if (typeof count.matrix !== "number") count.matrix = 0;
+  return count;
 }
 
 function emptyTokenCount(): TokenCount {
@@ -100,13 +114,18 @@ function loadStats(): StatsData {
       // 兼容升级前的 stats.json：补齐 tokens / apiCalls / dailyToken 字段，避免读取时 undefined
       for (const cid of Object.keys(rawChars)) {
         const c = rawChars[cid];
-        c.chat = c.chat || emptyChannelCount();
-        c.photo = c.photo || emptyChannelCount();
+        if (!c) continue;
+        c.chat = ensureChannelCount(c.chat);
+        c.photo = ensureChannelCount(c.photo);
         c.tokens = c.tokens || emptyTokenCount();
-        c.apiCalls = c.apiCalls || emptyChannelCount();
+        c.apiCalls = ensureChannelCount(c.apiCalls);
         c.dailyChat = c.dailyChat || {};
         c.dailyToken = c.dailyToken || {};
         c.dailyApi = c.dailyApi || {};
+        // 每日 API 序列内的分渠道对象同样需补齐（老数据只有 web/tg 两键）
+        for (const k of Object.keys(c.dailyApi)) {
+          c.dailyApi[k] = ensureChannelCount(c.dailyApi[k]);
+        }
       }
       cache = {
         version: parsed.version ?? 1,
@@ -149,9 +168,11 @@ function ensureChar(data: StatsData, id: string): CharacterStat {
     };
     data.characters[id] = c;
   } else {
-    // 兼容旧数据（升级前 stats.json 无 tokens/apiCalls/dailyToken/dailyApi）
+    // 兼容旧数据（升级前 stats.json 无 tokens/apiCalls/dailyToken/dailyApi，且分渠道对象无 matrix 位）
+    c.chat = ensureChannelCount(c.chat);
+    c.photo = ensureChannelCount(c.photo);
     if (!c.tokens) c.tokens = emptyTokenCount();
-    if (!c.apiCalls) c.apiCalls = emptyChannelCount();
+    c.apiCalls = ensureChannelCount(c.apiCalls);
     if (!c.dailyToken) c.dailyToken = {};
     if (!c.dailyApi) c.dailyApi = {};
   }
@@ -219,7 +240,7 @@ export function recordChat(characterId: string, channel: Channel): void {
   if (!characterId) return;
   const data = loadStats();
   const c = ensureChar(data, characterId);
-  c.chat[channel] += 1;
+  ensureChannelCount(c.chat)[channel] += 1;
   const key = todayKey();
   c.dailyChat[key] = (c.dailyChat[key] || 0) + 1;
   saveStats(data);
@@ -229,7 +250,7 @@ export function recordPhoto(characterId: string, channel: Channel): void {
   if (!characterId) return;
   const data = loadStats();
   const c = ensureChar(data, characterId);
-  c.photo[channel] += 1;
+  ensureChannelCount(c.photo)[channel] += 1;
   saveStats(data);
 }
 
@@ -253,10 +274,10 @@ export function recordApiCall(characterId: string, channel: Channel): void {
   if (!characterId) return;
   const data = loadStats();
   const c = ensureChar(data, characterId);
-  c.apiCalls[channel] += 1;
+  ensureChannelCount(c.apiCalls)[channel] += 1;
   const key = todayKey();
   if (!c.dailyApi[key]) c.dailyApi[key] = emptyChannelCount();
-  c.dailyApi[key][channel] += 1;
+  ensureChannelCount(c.dailyApi[key])[channel] += 1;
   saveStats(data);
 }
 
@@ -281,11 +302,11 @@ export function getStatsOverview(): StatsOverview {
   let totalTokenOutput = 0;
   let totalApi = 0;
   for (const c of characters) {
-    totalChat += c.chat.web + c.chat.tg;
-    totalPhoto += c.photo.web + c.photo.tg;
+    totalChat += c.chat.web + c.chat.tg + (c.chat.matrix ?? 0);
+    totalPhoto += c.photo.web + c.photo.tg + (c.photo.matrix ?? 0);
     totalTokenInput += c.tokens.input;
     totalTokenOutput += c.tokens.output;
-    totalApi += c.apiCalls.web + c.apiCalls.tg;
+    totalApi += c.apiCalls.web + c.apiCalls.tg + (c.apiCalls.matrix ?? 0);
   }
   return { totalChat, totalPhoto, totalTokenInput, totalTokenOutput, totalApi, characters };
 }
@@ -330,12 +351,16 @@ export function backfillFromSessions(): void {
   // 快照当前生图计数（不可从历史反推，须保留）
   const preservedPhoto: Record<string, ChannelCount> = {};
   for (const id of Object.keys(data.characters)) {
-    preservedPhoto[id] = { ...data.characters[id].photo };
+    const stat = data.characters[id];
+    if (!stat) continue;
+    preservedPhoto[id] = { ...ensureChannelCount(stat.photo) };
   }
   // 重置聊天计数与每日序列（以 session 历史为准）
   for (const id of Object.keys(data.characters)) {
-    data.characters[id].chat = emptyChannelCount();
-    data.characters[id].dailyChat = {};
+    const stat = data.characters[id];
+    if (!stat) continue;
+    stat.chat = emptyChannelCount();
+    stat.dailyChat = {};
   }
   try {
     const sessionDir = join(DATA_DIR, "sessions");

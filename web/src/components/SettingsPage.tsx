@@ -1,4 +1,4 @@
-import { Eye, EyeOff, KeyRound, Lock, RefreshCw, Save, Server, ShieldCheck, X } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Lock, Network, RefreshCw, Save, Server, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { DigitalHumanManager } from "./DigitalHumanManager";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -32,7 +32,7 @@ import {
  * - 令牌只保存在内存（不落 localStorage/sessionStorage），刷新页面即需重新输入密码。
  */
 
-type Tab = "humans" | "ai" | "prompts" | "security" | "service" | "stats";
+type Tab = "humans" | "ai" | "channels" | "prompts" | "security" | "service" | "stats";
 
 const PROMPT_FIELDS: Array<{ key: keyof Omit<PromptSettings, "sceneHints">; label: string; rows?: number }> = [
   { key: "globalSystem", label: "全局系统提示词", rows: 10 },
@@ -99,6 +99,12 @@ export function SettingsPage({
   const [rhTriggerWords, setRhTriggerWords] = useState("");
   const [rhTimeoutSec, setRhTimeoutSec] = useState("120");
 
+  // 渠道开关（全局总开关；角色级开关在「数字人管理」里逐角色设置）
+  // 生效规则：渠道可用 = 全局开关 AND 角色开关
+  const [chTgEnabled, setChTgEnabled] = useState(false);
+  const [chMatrixEnabled, setChMatrixEnabled] = useState(true);
+  const [chMatrixHomeserver, setChMatrixHomeserver] = useState("");
+
   // 提示词表单
   const [prompts, setPrompts] = useState<PromptSettings | null>(null);
 
@@ -117,6 +123,10 @@ export function SettingsPage({
     setRhApiKey("");
     setRhTriggerWords((data.runningHub?.triggerWords || []).join("\n"));
     setRhTimeoutSec(String(data.runningHub?.timeoutSec ?? 120));
+    // 老后端可能不返回 channels：TG 按"关"、Matrix 按"开"（与后端默认一致），避免误显示
+    setChTgEnabled(data.channels?.telegramEnabled ?? false);
+    setChMatrixEnabled(data.channels?.matrixEnabled ?? true);
+    setChMatrixHomeserver(data.channels?.matrixHomeserverDefault || "");
     setPrompts(data.prompts);
   };
 
@@ -264,6 +274,25 @@ export function SettingsPage({
       applySettings(data);
       markSaved("rh");
       flash(rhApiKey.trim() ? "生图设置已保存" : "触发词 / 超时已保存", "success");
+    });
+
+  const saveChannels = () =>
+    guard("channels", async () => {
+      const homeserver = chMatrixHomeserver.trim();
+      if (chMatrixEnabled && !homeserver) {
+        flash("启用 Matrix 渠道时必须填写默认 homeserver", "info");
+        return;
+      }
+      const data = await saveSettings({
+        channels: {
+          telegramEnabled: chTgEnabled,
+          matrixEnabled: chMatrixEnabled,
+          matrixHomeserverDefault: homeserver
+        }
+      });
+      applySettings(data);
+      markSaved("channels");
+      flash("渠道配置已保存，需重启服务后生效", "success");
     });
 
   const savePrompts = () =>
@@ -434,6 +463,7 @@ export function SettingsPage({
         <nav className="settings-tabs">
           <button type="button" className={tab === "humans" ? "active" : ""} onClick={() => setTab("humans")}>数字人管理</button>
           <button type="button" className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI 接口配置</button>
+          <button type="button" className={tab === "channels" ? "active" : ""} onClick={() => setTab("channels")}>渠道</button>
           <button type="button" className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}>提示词</button>
           <button type="button" className={tab === "security" ? "active" : ""} onClick={() => setTab("security")}>安全</button>
           <button type="button" className={tab === "service" ? "active" : ""} onClick={() => setTab("service")}>重启服务</button>
@@ -457,7 +487,7 @@ export function SettingsPage({
                 <Server size={16} /> 重启后端服务
               </h3>
               <p className="settings-lock-tip">
-                修改数字人的 Telegram 专属机器人 Token 后，新的 bot 仅在<strong>服务启动时</strong>加载，必须重启后端服务才能生效；其余配置（LLM / TTS / 提示词 / 长期记忆 / 会话）均为运行时热更新，无需重启。
+                修改数字人的 Telegram 专属机器人 Token、Matrix 账号/Token，或渠道开关后，这些渠道仅在<strong>服务启动时</strong>加载，必须重启后端服务才能生效；其余配置（LLM / TTS / 提示词 / 长期记忆 / 会话）均为运行时热更新，无需重启。
               </p>
               <p className="settings-lock-tip">
                 点击下方按钮将执行 <code>sudo systemctl restart digital-girlfriend</code>。重启过程约需 5 秒，期间服务短暂不可用；重启后内存中的解锁令牌失效，需重新输入设置密码。
@@ -583,6 +613,51 @@ export function SettingsPage({
                 <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void saveRh()}>
                   <Save size={16} /> {saveLabel("rh", "保存生图设置")}
                 </button>
+              </section>
+            ) : null}
+
+            {tab === "channels" ? (
+              <section className="settings-section">
+                <h3 className="settings-subtitle">
+                  <Network size={16} /> 渠道总开关
+                </h3>
+                <p className="settings-lock-tip">
+                  某个渠道对某个数字人是否生效 = <strong>这里的总开关</strong> 与 <strong>该数字人在「数字人管理」里的渠道开关</strong> 同时打开。
+                  总开关是紧急刹车：关掉后该渠道的所有数字人立即停用（重启服务后生效）。
+                </p>
+
+                <label className="settings-check">
+                  <input type="checkbox" checked={chMatrixEnabled} onChange={(e) => setChMatrixEnabled(e.target.checked)} />
+                  <span>启用 Matrix 渠道（自建 homeserver，推荐）</span>
+                </label>
+                <label className="settings-field">
+                  <span>Matrix 默认 homeserver（数字人未单独填写时使用）</span>
+                  <input
+                    value={chMatrixHomeserver}
+                    onChange={(e) => setChMatrixHomeserver(e.target.value)}
+                    placeholder="https://matrix.3585616.xyz"
+                  />
+                </label>
+
+                <label className="settings-check">
+                  <input type="checkbox" checked={chTgEnabled} onChange={(e) => setChTgEnabled(e.target.checked)} />
+                  <span>启用 Telegram 渠道（依赖官方 Bot API，当前网络环境下不可用）</span>
+                </label>
+                <p className="settings-lock-tip">
+                  Telegram 渠道的代码与配置全部保留：重新打开该开关并重启服务即可完整恢复，无需改代码。
+                </p>
+
+                <div className="settings-btn-row">
+                  <button type="button" className="settings-primary-btn" disabled={saving !== null} onClick={() => void saveChannels()}>
+                    <Save size={16} /> {saveLabel("channels", "保存渠道配置")}
+                  </button>
+                  <button type="button" className="ghost-btn" disabled={saving !== null} onClick={() => setTab("humans")}>
+                    去配置角色级开关
+                  </button>
+                </div>
+                <p className="settings-lock-tip">
+                  渠道配置在服务启动时读取，保存后需到「重启服务」标签页重启后端才会生效。
+                </p>
               </section>
             ) : null}
 
@@ -748,7 +823,16 @@ function buildTokenSeries(
   return out;
 }
 
-/** 根据区间构造每日 API 请求序列（网页+TG 求和，升序）；7/30 天强制补齐缺失日期为 0。 */
+/** 渠道计数求和。matrix 是老数据里可能缺失的可选键，统一按 0 处理。 */
+function sumChannels(c: StatsChannelCount | undefined): number {
+  return (c?.web || 0) + (c?.tg || 0) + (c?.matrix || 0);
+}
+
+function emptyChannelCount(): StatsChannelCount {
+  return { web: 0, tg: 0, matrix: 0 };
+}
+
+/** 根据区间构造每日 API 请求序列（各渠道求和，升序）；7/30 天强制补齐缺失日期为 0。 */
 function buildApiSeries(
   dailyApi: Record<string, StatsChannelCount>,
   range: StatsRange
@@ -756,7 +840,7 @@ function buildApiSeries(
   if (range === "all") {
     return Object.keys(dailyApi)
       .sort()
-      .map((date) => ({ date, count: (dailyApi[date]?.web || 0) + (dailyApi[date]?.tg || 0) }));
+      .map((date) => ({ date, count: sumChannels(dailyApi[date]) }));
   }
   const days = range === "7" ? 7 : 30;
   const out: Array<{ date: string; count: number }> = [];
@@ -765,8 +849,7 @@ function buildApiSeries(
     const d = new Date(today);
     d.setDate(today.getDate() - i);
     const key = fmtDate(d);
-    const t = dailyApi[key];
-    out.push({ date: key, count: (t?.web || 0) + (t?.tg || 0) });
+    out.push({ date: key, count: sumChannels(dailyApi[key]) });
   }
   return out;
 }
@@ -1136,23 +1219,23 @@ function StatsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 合并数字人列表与统计（缺失统计的显示 0）；TG 活跃角色靠前
+  // 合并数字人列表与统计（缺失统计的显示 0）；按总活跃度排序
   const rows: StatsRow[] = characters.map((dh) => {
     const s = stats?.characters.find((c) => c.id === dh.id);
     return {
       id: dh.id,
       name: dh.name,
       avatarUrl: dh.avatarUrl,
-      chat: s?.chat ?? { web: 0, tg: 0 },
-      photo: s?.photo ?? { web: 0, tg: 0 },
+      chat: s?.chat ?? emptyChannelCount(),
+      photo: s?.photo ?? emptyChannelCount(),
       dailyChat: s?.dailyChat ?? {},
       tokens: s?.tokens ?? { input: 0, output: 0 },
-      apiCalls: s?.apiCalls ?? { web: 0, tg: 0 },
+      apiCalls: s?.apiCalls ?? emptyChannelCount(),
       dailyToken: s?.dailyToken ?? {},
       dailyApi: s?.dailyApi ?? {}
     };
   });
-  rows.sort((a, b) => b.chat.tg - a.chat.tg || b.chat.web - a.chat.web);
+  rows.sort((a, b) => sumChannels(b.chat) - sumChannels(a.chat));
 
   // 全部角色每日聊天合并（总览趋势图）
   const overviewDaily: Record<string, number> = {};
@@ -1178,9 +1261,13 @@ function StatsTab({
   const overviewDailyApi: Record<string, StatsChannelCount> = {};
   for (const row of rows) {
     for (const date of Object.keys(row.dailyApi)) {
-      if (!overviewDailyApi[date]) overviewDailyApi[date] = { web: 0, tg: 0 };
-      overviewDailyApi[date].web += row.dailyApi[date].web;
-      overviewDailyApi[date].tg += row.dailyApi[date].tg;
+      const day = row.dailyApi[date];
+      if (!day) continue;
+      const bucket = overviewDailyApi[date] ?? emptyChannelCount();
+      bucket.web += day.web || 0;
+      bucket.tg += day.tg || 0;
+      bucket.matrix = (bucket.matrix || 0) + (day.matrix || 0);
+      overviewDailyApi[date] = bucket;
     }
   }
   const overviewApiSeries = buildApiSeries(overviewDailyApi, range);
@@ -1221,7 +1308,9 @@ function StatsTab({
             <div className="stats-overview-label">总对话轮次</div>
             {stats ? (
               <div className="stats-overview-split">
-                网页 {stats.characters.reduce((a, c) => a + c.chat.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.chat.tg, 0)}
+                网页 {stats.characters.reduce((a, c) => a + c.chat.web, 0)} · Matrix{" "}
+                {stats.characters.reduce((a, c) => a + (c.chat.matrix || 0), 0)} · TG{" "}
+                {stats.characters.reduce((a, c) => a + c.chat.tg, 0)}
               </div>
             ) : null}
           </div>
@@ -1230,7 +1319,9 @@ function StatsTab({
             <div className="stats-overview-label">总生图次数</div>
             {stats ? (
               <div className="stats-overview-split">
-                网页 {stats.characters.reduce((a, c) => a + c.photo.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.photo.tg, 0)}
+                网页 {stats.characters.reduce((a, c) => a + c.photo.web, 0)} · Matrix{" "}
+                {stats.characters.reduce((a, c) => a + (c.photo.matrix || 0), 0)} · TG{" "}
+                {stats.characters.reduce((a, c) => a + c.photo.tg, 0)}
               </div>
             ) : null}
           </div>
@@ -1250,7 +1341,9 @@ function StatsTab({
             <div className="stats-overview-label">总 API 请求</div>
             {stats ? (
               <div className="stats-overview-split">
-                网页 {stats.characters.reduce((a, c) => a + c.apiCalls.web, 0)} · TG {stats.characters.reduce((a, c) => a + c.apiCalls.tg, 0)}
+                网页 {stats.characters.reduce((a, c) => a + c.apiCalls.web, 0)} · Matrix{" "}
+                {stats.characters.reduce((a, c) => a + (c.apiCalls.matrix || 0), 0)} · TG{" "}
+                {stats.characters.reduce((a, c) => a + c.apiCalls.tg, 0)}
               </div>
             ) : null}
           </div>
@@ -1277,7 +1370,7 @@ function StatsTab({
           </div>
         ) : null}
         <p className="settings-lock-tip">
-          统计按「消息轮次」累计（每发一条消息 +1），生图仅 Telegram 端支持。Token 与 API 请求仅统计 LLM 文本调用（生图/语音不计入），且<strong>自功能上线起累计、无历史回填</strong>。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
+          统计按「消息轮次」累计（每发一条消息 +1），生图支持 Telegram / Matrix 端。Token 与 API 请求仅统计 LLM 文本调用（生图/语音不计入），且<strong>自功能上线起累计、无历史回填</strong>。清除记忆/聊天<strong>不会</strong>清除统计；删除整个数字人或单角色「重置统计」才会清零。
         </p>
       </section>
       ) : null}
@@ -1291,8 +1384,8 @@ function StatsTab({
 
         <div className="stats-grid-cards">
           {rows.map((row) => {
-            const totalChat = row.chat.web + row.chat.tg;
-            const totalPhoto = row.photo.web + row.photo.tg;
+            const totalChat = sumChannels(row.chat);
+            const totalPhoto = sumChannels(row.photo);
             const expanded = expandedId === row.id;
             const series = buildSeries(row.dailyChat, range);
             const hasData = series.some((s) => s.count > 0);
@@ -1311,6 +1404,7 @@ function StatsTab({
                   <div className="stats-card-cover-overlay">
                     <div className="stats-card-name">{row.name}</div>
                     {row.chat.tg > 0 ? <span className="stats-card-tg-badge">TG 活跃</span> : null}
+                    {row.chat.matrix ? <span className="stats-card-tg-badge">Matrix 活跃</span> : null}
                   </div>
                   <button
                     type="button"
@@ -1330,7 +1424,7 @@ function StatsTab({
                   <div className="stats-metric-card">
                     <span className="stats-metric-label">对话轮次</span>
                     <span className="stats-metric-value">{totalChat}</span>
-                    <span className="stats-metric-sub">网页 {row.chat.web} · TG {row.chat.tg}</span>
+                    <span className="stats-metric-sub">网页 {row.chat.web} · Matrix {row.chat.matrix || 0} · TG {row.chat.tg}</span>
                   </div>
                   <div className="stats-metric-card">
                     <span className="stats-metric-label">Token 消耗</span>
@@ -1339,11 +1433,11 @@ function StatsTab({
                   </div>
                   <div className="stats-metric-card">
                     <span className="stats-metric-label">API 请求</span>
-                    <span className="stats-metric-value">{row.apiCalls.web + row.apiCalls.tg}</span>
-                    <span className="stats-metric-sub">网页 {row.apiCalls.web} · TG {row.apiCalls.tg}</span>
+                    <span className="stats-metric-value">{sumChannels(row.apiCalls)}</span>
+                    <span className="stats-metric-sub">网页 {row.apiCalls.web} · Matrix {row.apiCalls.matrix || 0} · TG {row.apiCalls.tg}</span>
                   </div>
                 </div>
-                <div className="stats-card-photo">生图 <b>{totalPhoto}</b> <span className="stats-card-sub">（仅 Telegram 端）</span></div>
+                <div className="stats-card-photo">生图 <b>{totalPhoto}</b> <span className="stats-card-sub">（Telegram / Matrix 端）</span></div>
                 <div className="stats-card-actions">
                   <button type="button" className="ghost-btn" disabled={busy} onClick={() => setExpandedId(expanded ? null : row.id)}>
                     {expanded ? "收起趋势" : "查看趋势"}

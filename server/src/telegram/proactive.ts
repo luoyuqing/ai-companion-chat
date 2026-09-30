@@ -5,7 +5,8 @@ import { loadSession, appendToSession } from "../services/session";
 import { getOpenAiClient, resolveLlmModel } from "../services/llm";
 import { getUserMemory } from "../services/userMemory";
 import type { DigitalHumanConfig, ProactiveConfig } from "../types";
-import { sendProactiveToOwner } from "./bot";
+import { sendProactiveMessage } from "../services/channelDispatch";
+import { canStartMatrixChannel, canStartTelegramChannel } from "../core/channel";
 import { isUserActiveRecently, CHAT_ACTIVE_WINDOW_MS, seedActivity } from "../core/activity";
 import { getRealtimeContext } from "../services/realtime";
 
@@ -204,7 +205,9 @@ async function tick(): Promise<void> {
 
   for (const c of characters) {
     if (!c.proactive?.enabled) continue;
-    if (!c.telegramBotToken) continue; // 必须配置了专属 bot 才能主动发
+    // 至少要有一个可用投递渠道（Matrix 或 TG 专属 bot），否则本角色无法主动发消息。
+    // 注意：改造前这里硬性要求 telegramBotToken —— 现在 Matrix 渠道同样能投递，不能再以 TG token 为前提。
+    if (!canStartMatrixChannel(c) && !canStartTelegramChannel(c)) continue;
     const timePoints = (c.proactive.timePoints || []).filter((t) => typeof t === "string");
     if (!timePoints.includes(hm)) continue;
     const markerKey = `${c.id}:${hm}`;
@@ -254,7 +257,7 @@ async function tick(): Promise<void> {
 
     // 3) 落盘先于发送：即便发送过程中进程重启，新进程读到磁盘标记也会跳过，彻底防止「重启导致连发两条」
     markSent(markerKey, marker);
-    const ok = await sendProactiveToOwner(c, decision.message.trim());
+    const ok = await sendProactiveMessage(c, decision.message.trim());
     if (ok) {
       console.log(`[主动推送] 已发送 → ${c.name}(${c.id}) @${hm}`);
       // 把主动消息写回会话，使网页/TG 历史一致、并影响后续上下文

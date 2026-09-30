@@ -96,6 +96,22 @@ export interface DigitalHuman {
     probability?: number;
     timePointProbabilities?: Record<string, number>;
   };
+  /**
+   * 本角色 Telegram 渠道开关。缺省（undefined）视为**开启** —— 老配置没有该字段。
+   * 实际生效需「全局开关 AND 角色开关」同时为真。
+   */
+  telegramEnabled?: boolean;
+  /** 本角色 Matrix 渠道开关（缺省视为关闭）。 */
+  matrixEnabled?: boolean;
+  /** Matrix homeserver（留空取全局默认） */
+  matrixHomeserver?: string;
+  /** Matrix 账号完整 id，如 @dg-jiangrouyi:matrix.3585616.xyz */
+  matrixUserId?: string;
+  /**
+   * Matrix home room id；留空 = 首次启动由 bot 自动建房并回填。
+   * 注意：matrixAccessToken 属敏感凭证，后端返回时已剥离，此处不出现该字段。
+   */
+  matrixRoomId?: string;
 }
 
 // 长期记忆（用户与某数字人的关系/记忆资料）——后端唯一真源，跨浏览器/TG 一致。
@@ -142,6 +158,16 @@ export interface CreateHumanRequest {
     probability?: number;
     timePointProbabilities?: Record<string, number>;
   };
+  /** 角色级 TG 开关（缺省视为开启） */
+  telegramEnabled?: boolean;
+  /** ---- Matrix 渠道（一角色一账号一私聊房间）---- */
+  matrixEnabled?: boolean;
+  matrixHomeserver?: string;
+  matrixUserId?: string;
+  /** 敏感凭证：留空表示不修改；填写则覆盖 */
+  matrixAccessToken?: string;
+  /** home room；留空 = 首次启动自动建房并回填 */
+  matrixRoomId?: string;
 }
 
 export type UpdateHumanRequest = Partial<CreateHumanRequest>;
@@ -1110,10 +1136,20 @@ export interface SettingsRunningHub {
   timeoutSec: number;
 }
 
+export interface SettingsChannels {
+  /** Telegram 渠道总开关（迁移 Matrix 后默认关闭；打开 + 重启即恢复 TG） */
+  telegramEnabled: boolean;
+  /** Matrix 渠道总开关（默认开启） */
+  matrixEnabled: boolean;
+  /** Matrix 默认 homeserver（角色未单独填写时使用） */
+  matrixHomeserverDefault: string;
+}
+
 export interface SystemSettings {
   llm: SettingsLlm;
   tts: SettingsTts;
   runningHub: SettingsRunningHub;
+  channels: SettingsChannels;
   prompts: PromptSettings;
 }
 
@@ -1121,6 +1157,7 @@ export interface SaveSettingsInput {
   llm?: { baseUrl?: string; apiKey?: string; model?: string; supportsVision?: boolean };
   tts?: { apiKey?: string };
   runningHub?: { apiKey?: string; triggerWords?: string[]; timeoutSec?: number };
+  channels?: { telegramEnabled?: boolean; matrixEnabled?: boolean; matrixHomeserverDefault?: string };
   prompts?: PromptSettings;
 }
 
@@ -1193,6 +1230,8 @@ export async function resetPromptSettings(): Promise<SystemSettings> {
 export interface StatsChannelCount {
   web: number;
   tg: number;
+  /** Matrix 渠道（老数据可能缺该键，按 0 处理） */
+  matrix?: number;
 }
 
 export interface TokenCount {

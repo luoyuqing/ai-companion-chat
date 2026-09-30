@@ -42,10 +42,35 @@ export interface RunningHubConfig {
   timeoutSec: number;
 }
 
+/**
+ * 渠道总开关（与角色级开关取「AND」——两者都为真该渠道才实际运行）。
+ * 设计目的：既能一键全关某渠道，也能按角色灰度，两个诉求共存。
+ */
+export interface ChannelsConfig {
+  /**
+   * Telegram 渠道总开关。默认 **false**（2026-09 迁移 Matrix 后默认关闭）。
+   * 关闭时 grammy 不启动任何 polling、主动推送的 TG 路由短路；代码全保留，改回 true + 重启即完整恢复。
+   * 可用环境变量 TELEGRAM_ENABLED 覆盖默认值。
+   */
+  telegramEnabled: boolean;
+  /** Matrix 渠道总开关。默认 true。可用环境变量 MATRIX_ENABLED 覆盖默认值。 */
+  matrixEnabled: boolean;
+  /** Matrix 默认 homeserver（角色未单独填写 matrixHomeserver 时使用）。 */
+  matrixHomeserverDefault: string;
+}
+
+/** 脚本/环境变量解析布尔值："1"/"true"/"yes"/"on" 为真（大小写不敏感），其余为假 */
+function envBool(value: string | undefined, fallback: boolean): boolean {
+  const v = envString(value).toLowerCase();
+  if (!v) return fallback;
+  return ["1", "true", "yes", "on"].includes(v);
+}
+
 export interface SystemConfig {
   llm: LlmConfig;
   tts: TtsConfig;
   runningHub: RunningHubConfig;
+  channels: ChannelsConfig;
   // 扩展位：后续新增的菜单/配置项统一挂载到根级字段，保持向后兼容
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: unknown;
@@ -63,6 +88,9 @@ const CONFIG_FILE = path.join(DATA_DIR, "system-config.json");
 const MIMO_BASE_URL = "https://api.xiaomimimo.com/v1";
 const MIMO_TTS_MODEL = "mimo-v2.5-tts";
 const MIMO_DEFAULT_VOICE = "冰糖";
+
+/** Matrix 默认 homeserver（自建 tuwunel，X2 盒子经 CF 隧道对外） */
+const DEFAULT_MATRIX_HOMESERVER = "https://matrix.3585616.xyz";
 
 function envString(value?: string): string {
   return typeof value === "string" ? value.trim() : "";
@@ -87,6 +115,12 @@ function buildDefaults(): SystemConfig {
       apiKey: envString(process.env.RUNNINGHUB_API_KEY),
       triggerWords: ["拍张照"],
       timeoutSec: 120
+    },
+    channels: {
+      // 迁移 Matrix 后 TG 默认关闭；需要回退时改这里（或设 TELEGRAM_ENABLED=true）
+      telegramEnabled: envBool(process.env.TELEGRAM_ENABLED, false),
+      matrixEnabled: envBool(process.env.MATRIX_ENABLED, true),
+      matrixHomeserverDefault: envString(process.env.MATRIX_HOMESERVER) || DEFAULT_MATRIX_HOMESERVER
     }
   };
 }
@@ -137,6 +171,20 @@ function deepMergeRunningHub(base: RunningHubConfig, override?: Partial<RunningH
   };
 }
 
+function deepMergeChannels(base: ChannelsConfig, override?: Partial<ChannelsConfig>): ChannelsConfig {
+  if (!override) return base;
+  return {
+    // 布尔开关：仅当显式传入布尔值才覆盖，缺省保留 base（避免 undefined 把 TG 静默关掉）
+    telegramEnabled:
+      typeof override.telegramEnabled === "boolean" ? override.telegramEnabled : base.telegramEnabled,
+    matrixEnabled: typeof override.matrixEnabled === "boolean" ? override.matrixEnabled : base.matrixEnabled,
+    matrixHomeserverDefault:
+      typeof override.matrixHomeserverDefault === "string" && override.matrixHomeserverDefault.trim()
+        ? override.matrixHomeserverDefault.trim().replace(/\/+$/, "")
+        : base.matrixHomeserverDefault
+  };
+}
+
 function loadConfig(): SystemConfig {
   const defaults = buildDefaults();
   try {
@@ -147,6 +195,7 @@ function loadConfig(): SystemConfig {
         llm: deepMergeLlm(defaults.llm, raw.llm),
         tts: deepMergeTts(defaults.tts, raw.tts),
         runningHub: deepMergeRunningHub(defaults.runningHub, raw.runningHub),
+        channels: deepMergeChannels(defaults.channels, raw.channels),
         prompts: raw.prompts
       };
     }
@@ -173,6 +222,10 @@ export function getRunningHubConfig(): RunningHubConfig {
   return getSystemConfig().runningHub;
 }
 
+export function getChannelsConfig(): ChannelsConfig {
+  return getSystemConfig().channels;
+}
+
 export interface LlmConfigInput {
   baseUrl?: string;
   /** 提供空字符串表示清除；字段缺失表示保留 */
@@ -186,10 +239,17 @@ export interface TtsConfigInput {
   apiKey?: string;
 }
 
+export interface ChannelsConfigInput {
+  telegramEnabled?: boolean;
+  matrixEnabled?: boolean;
+  matrixHomeserverDefault?: string;
+}
+
 export interface SystemConfigInput {
   llm?: LlmConfigInput;
   tts?: TtsConfigInput;
   runningHub?: { apiKey?: string; triggerWords?: string[]; timeoutSec?: number };
+  channels?: ChannelsConfigInput;
   /** 用户覆盖的提示词（来自网页端「提示词」设置）。传 undefined 表示保留现有值；传 {} 表示清除覆盖、恢复默认 */
   prompts?: unknown;
 }
@@ -200,7 +260,8 @@ export function saveSystemConfig(input: SystemConfigInput): SystemConfig {
     ...current,
     llm: deepMergeLlm(current.llm, input.llm),
     tts: deepMergeTts(current.tts, input.tts),
-    runningHub: deepMergeRunningHub(current.runningHub, input.runningHub)
+    runningHub: deepMergeRunningHub(current.runningHub, input.runningHub),
+    channels: deepMergeChannels(current.channels, input.channels)
   };
   // prompts 覆盖：传 undefined 保留现有；传 {} 或具体值则覆盖（含空对象即视为清除自定义）
   if (input.prompts !== undefined) {
@@ -256,6 +317,12 @@ export function publicSystemConfig(): PublicSystemConfig {
       hasApiKey: Boolean(cfg.runningHub.apiKey),
       triggerWords: cfg.runningHub.triggerWords,
       timeoutSec: cfg.runningHub.timeoutSec
+    },
+    // 渠道开关无敏感信息，直接透传（页面据此渲染全局总开关）
+    channels: {
+      telegramEnabled: cfg.channels.telegramEnabled,
+      matrixEnabled: cfg.channels.matrixEnabled,
+      matrixHomeserverDefault: cfg.channels.matrixHomeserverDefault
     }
   };
 }

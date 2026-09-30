@@ -467,11 +467,9 @@ export function registerBot(bot: Bot<BotContext>, botToken: string, fixedCharact
     // 先回执，再异步发起（不阻塞，期间用户可正常聊天）
     await ctx.reply("我一会儿拍视频，等5分钟后发你，先聊着～");
     void startVideoTask({
-      api: ctx.api,
-      botToken,
-      chatId: ctx.chat!.id,
       character,
-      repliedPhotoFileId,
+      delivery: { kind: "tg", botToken, chatId: ctx.chat!.id },
+      source: { kind: "tg", botToken, fileId: repliedPhotoFileId },
       userText,
       recentMessages: recent,
       sessionId: sid

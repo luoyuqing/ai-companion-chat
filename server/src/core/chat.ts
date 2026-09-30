@@ -146,8 +146,8 @@ export async function runChat(opts: {
   sceneId?: CompanionSceneId;
   styleId?: ResponseStyleId;
   adultVerified?: boolean;
-  /** 来源渠道：网页端 web / Telegram 端 tg（用于统计分渠道计数） */
-  channel?: "web" | "tg";
+  /** 来源渠道：网页端 web / Telegram 端 tg / Matrix 端 matrix（用于统计分渠道计数） */
+  channel?: "web" | "tg" | "matrix";
 }): Promise<ChatResult> {
   const sessionId = (opts.sessionId && String(opts.sessionId).trim()) || makeSessionId();
   const message = String(opts.message || "").trim();

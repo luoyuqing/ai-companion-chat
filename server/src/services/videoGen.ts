@@ -16,6 +16,7 @@ import { Api, InputFile } from "grammy";
 
 import { getRunningHubConfig } from "../core/config";
 import { DATA_DIR } from "../core/data";
+import { MatrixClient } from "../matrix/client";
 import { getOpenAiClient, resolveLlmModel } from "./llm";
 import { loadSession } from "./session";
 import { ChatMessage, DigitalHumanConfig } from "../types";
@@ -33,6 +34,20 @@ const VIDEO_TASKS_FILE = path.join(DATA_DIR, "video-tasks.json");
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 投递目标：视频生成完成后把结果推送到哪里。
+ * 抽成描述符（而非直接持有 grammy Bot 实例）是为了让 Matrix 渠道复用同一套轮询/推送逻辑，
+ * 并让「重启后续轮询」不依赖任何渠道客户端实例是否就绪。
+ */
+export type VideoDelivery =
+  | { kind: "tg"; botToken: string; chatId: number }
+  | { kind: "matrix"; homeserver: string; accessToken: string; userId: string; roomId: string };
+
+/** 源照片的取用方式（TG 用 fileId，Matrix 用 mxc URI） */
+export type VideoSource =
+  | { kind: "tg"; botToken: string; fileId: string }
+  | { kind: "matrix"; homeserver: string; accessToken: string; mxcUri: string };
+
 // ⚠️ 全局单在途锁：同一时刻只允许 1 个视频生成任务在途（用户确认）。
 // 任何终态（SUCCESS/FAILED/TIMEOUT/连续查询失败）都必须释放该锁，否则功能会永久卡死。
 let videoInFlight = false;
@@ -42,16 +57,60 @@ export function isVideoInFlight(): boolean {
 
 interface VideoTask {
   taskId: string;
-  chatId: number;
   characterId: string;
   sessionId: string;
-  botToken: string;
-  repliedPhotoFileId: string;
   userText: string;
   durationSec: number;
   prompt: string; // 自然语言提示词，"" 表示空白提示词
   fileName: string; // RunningHub 上传后的图片 fileName（恢复时无需重新下载照片）
   createdAt: number;
+  /** 结果投递目标 */
+  delivery: VideoDelivery;
+  /** 源照片取用方式（仅用于持久化留档，恢复轮询时不需要） */
+  source: VideoSource;
+}
+
+/** 升级前持久化的任务结构（TG 单渠道时代） */
+interface LegacyVideoTask {
+  taskId?: string;
+  chatId?: number;
+  characterId?: string;
+  sessionId?: string;
+  botToken?: string;
+  repliedPhotoFileId?: string;
+  userText?: string;
+  durationSec?: number;
+  prompt?: string;
+  fileName?: string;
+  createdAt?: number;
+  delivery?: VideoDelivery;
+  source?: VideoSource;
+}
+
+/** 把老结构（含 botToken/chatId）升级为新结构，保证重启恢复向前兼容 */
+function upgradeTask(raw: LegacyVideoTask): VideoTask | null {
+  if (!raw?.taskId) return null;
+  let delivery = raw.delivery;
+  let source = raw.source;
+  if (!delivery && raw.botToken && typeof raw.chatId === "number") {
+    delivery = { kind: "tg", botToken: raw.botToken, chatId: raw.chatId };
+  }
+  if (!source && raw.botToken && raw.repliedPhotoFileId) {
+    source = { kind: "tg", botToken: raw.botToken, fileId: raw.repliedPhotoFileId };
+  }
+  if (!delivery) return null; // 无法确定投递目标，丢弃该任务
+  return {
+    taskId: raw.taskId,
+    characterId: String(raw.characterId || ""),
+    sessionId: String(raw.sessionId || ""),
+    userText: String(raw.userText || ""),
+    durationSec: Number(raw.durationSec) || DEFAULT_DURATION_SEC,
+    prompt: String(raw.prompt ?? ""),
+    fileName: String(raw.fileName || ""),
+    createdAt: Number(raw.createdAt) || Date.now(),
+    delivery,
+    source: source || { kind: "tg", botToken: raw.botToken || "", fileId: raw.repliedPhotoFileId || "" }
+  };
 }
 
 // ---------- 持久化（重启续轮询）----------
@@ -59,8 +118,9 @@ interface VideoTask {
 function loadTasks(): VideoTask[] {
   try {
     if (!existsSync(VIDEO_TASKS_FILE)) return [];
-    const arr = JSON.parse(readFileSync(VIDEO_TASKS_FILE, "utf8")) as VideoTask[];
-    return Array.isArray(arr) ? arr : [];
+    const arr = JSON.parse(readFileSync(VIDEO_TASKS_FILE, "utf8")) as LegacyVideoTask[];
+    if (!Array.isArray(arr)) return [];
+    return arr.map(upgradeTask).filter((t): t is VideoTask => t !== null);
   } catch {
     return [];
   }
@@ -211,7 +271,7 @@ function cleanupDir(dir: string): void {
   }
 }
 
-// ---------- Telegram 文件下载（回复的照片）----------
+// ---------- 源照片下载（用户回复的那张图）----------
 
 async function downloadTelegramFile(
   api: Api,
@@ -236,6 +296,19 @@ async function downloadTelegramFile(
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("下载 Telegram 文件失败");
+}
+
+/** 按渠道取源照片到本地临时文件（TG: getFile+curl；Matrix: 媒体下载端点） */
+async function downloadSourcePhoto(source: VideoSource, dest: string): Promise<void> {
+  if (source.kind === "tg") {
+    await downloadTelegramFile(new Api(source.botToken), source.botToken, source.fileId, dest);
+    return;
+  }
+  const client = new MatrixClient({
+    homeserver: source.homeserver,
+    accessToken: source.accessToken
+  });
+  await client.downloadMedia(source.mxcUri, dest);
 }
 
 // ---------- 提示词生成（自然语言，仅基于用户回复图片时说的话）----------
@@ -376,39 +449,86 @@ async function generateVideoFollowup(
 
 // ---------- 推送（视频或失败文案）----------
 
+/** TG 渠道推送 */
+async function deliverViaTelegram(
+  delivery: Extract<VideoDelivery, { kind: "tg" }>,
+  videoPath: string | null,
+  text: string
+): Promise<void> {
+  const api = new Api(delivery.botToken);
+  if (videoPath) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await api.sendChatAction(delivery.chatId, "upload_video").catch(() => {});
+        await api.sendVideo(delivery.chatId, new InputFile(videoPath), {
+          caption: text.slice(0, 1024)
+        });
+        return;
+      } catch (e) {
+        if (attempt === 2) throw e;
+        await sleep(500 * Math.pow(2, attempt));
+      }
+    }
+    return;
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await api.sendMessage(delivery.chatId, text.slice(0, 4000));
+      return;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await sleep(500 * Math.pow(2, attempt));
+    }
+  }
+}
+
+/** Matrix 渠道推送：mp4 直发 m.video（无需转码），失败时退化为文本 */
+async function deliverViaMatrix(
+  delivery: Extract<VideoDelivery, { kind: "matrix" }>,
+  videoPath: string | null,
+  text: string
+): Promise<void> {
+  const client = new MatrixClient({
+    homeserver: delivery.homeserver,
+    accessToken: delivery.accessToken,
+    userId: delivery.userId
+  });
+  if (videoPath) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await client.sendMedia(delivery.roomId, "video", videoPath, { caption: text });
+        return;
+      } catch (e) {
+        if (attempt === 2) throw e;
+        await sleep(1000 * Math.pow(2, attempt));
+      }
+    }
+    return;
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await client.sendText(delivery.roomId, text);
+      return;
+    } catch (e) {
+      if (attempt === 2) throw e;
+      await sleep(500 * Math.pow(2, attempt));
+    }
+  }
+}
+
 async function sendVideoMessage(
   task: VideoTask,
   videoPath: string | null,
   text: string
 ): Promise<void> {
-  const api = new Api(task.botToken);
   try {
-    if (videoPath) {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await api.sendChatAction(task.chatId, "upload_video").catch(() => {});
-          await api.sendVideo(task.chatId, new InputFile(videoPath), {
-            caption: text.slice(0, 1024)
-          });
-          break;
-        } catch (e) {
-          if (attempt === 2) throw e;
-          await sleep(500 * Math.pow(2, attempt));
-        }
-      }
+    if (task.delivery.kind === "tg") {
+      await deliverViaTelegram(task.delivery, videoPath, text);
     } else {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await api.sendMessage(task.chatId, text.slice(0, 4000));
-          break;
-        } catch (e) {
-          if (attempt === 2) throw e;
-          await sleep(500 * Math.pow(2, attempt));
-        }
-      }
+      await deliverViaMatrix(task.delivery, videoPath, text);
     }
   } catch (err) {
-    console.error(`[VIDEO][${task.characterId}] 推送失败:`, err);
+    console.error(`[VIDEO][${task.characterId}] 推送失败(${task.delivery.kind}):`, err);
   } finally {
     releaseTask(task.taskId); // 任一终态都强制释放锁 + 删除持久化任务
   }
@@ -522,11 +642,11 @@ async function pollVideoTask(task: VideoTask): Promise<void> {
 // ---------- 对外主入口 ----------
 
 export async function startVideoTask(opts: {
-  api: Api;
-  botToken: string;
-  chatId: number;
   character: DigitalHumanConfig;
-  repliedPhotoFileId: string;
+  /** 结果投递目标：TG 或 Matrix */
+  delivery: VideoDelivery;
+  /** 用户回复的那张照片的取用方式 */
+  source: VideoSource;
   userText: string;
   recentMessages: ChatMessage[];
   sessionId: string;
@@ -539,7 +659,7 @@ export async function startVideoTask(opts: {
 
   const tag = `[VIDEO][${opts.character.name}]`;
   const t0 = Date.now();
-  console.log(`${tag} 视频生成开始 chatId=${opts.chatId}`);
+  console.log(`${tag} 视频生成开始 channel=${opts.delivery.kind}`);
 
   let imgTmp: string | null = null;
   try {
@@ -555,7 +675,7 @@ export async function startVideoTask(opts: {
 
     // 下载用户回复的照片（临时，用完即删，不在服务器留存）
     imgTmp = path.join(os.tmpdir(), `dg-vsrc-${Date.now()}-${Math.random().toString(16).slice(2)}.img`);
-    await downloadTelegramFile(opts.api, opts.botToken, opts.repliedPhotoFileId, imgTmp);
+    await downloadSourcePhoto(opts.source, imgTmp);
 
     // 上传到 RunningHub
     const fileName = await rhUploadImage(apiKey, imgTmp);
@@ -574,16 +694,15 @@ export async function startVideoTask(opts: {
 
     const task: VideoTask = {
       taskId,
-      chatId: opts.chatId,
       characterId: opts.character.id,
       sessionId: opts.sessionId,
-      botToken: opts.botToken,
-      repliedPhotoFileId: opts.repliedPhotoFileId,
       userText: opts.userText,
       durationSec,
       prompt,
       fileName,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      delivery: opts.delivery,
+      source: opts.source
     };
     persistTasks([task]);
 
