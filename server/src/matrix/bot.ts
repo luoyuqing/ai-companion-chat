@@ -161,6 +161,34 @@ function effectiveOwner(): string | null {
   return allowedOwnerFromEnv() || loadOwner();
 }
 
+/**
+ * 计算建房时要邀请的对象。
+ *
+ * ⚠️ 这里**绝不能**把 bot 自己的 `matrixUserId` 当兜底 —— 那会变成「邀请自己」，
+ * 房间只有 bot 一个人，真正的你永远收不到邀请，渠道静默不可用。
+ * 启动前请务必在 `server/.env` 配置 `MATRIX_OWNER_USER_ID=@<你的账号>:<homeserver>`。
+ */
+function resolveInviteTarget(selfUserId: string, characterName: string): string[] {
+  const owner = effectiveOwner();
+  if (!owner) {
+    console.warn(
+      `[matrix][${characterName}] ⚠️ 未配置主人账号（MATRIX_OWNER_USER_ID 或 owner-matrix.json），` +
+        `建房时不会发送任何邀请。请设置 MATRIX_OWNER_USER_ID=@<你的账号>:<homeserver> 后重启；` +
+        `不要用客户端主动私聊建房（客户端可能默认启用加密，会导致 bot 读不到消息）。`
+    );
+    return [];
+  }
+  if (owner === selfUserId) {
+    console.error(
+      `[matrix][${characterName}] ⚠️ 主人账号与 bot 自身账号相同（${owner}），` +
+        `这等于「邀请自己」，真正的你收不到邀请。请把 matrixUserId 保持为 bot 账号，` +
+        `另用 MATRIX_OWNER_USER_ID 指定你自己的账号。`
+    );
+    return [];
+  }
+  return [owner];
+}
+
 // ---------- 工具 ----------
 
 function sceneLabel(id?: string): string {
@@ -855,12 +883,12 @@ async function prepareRoom(
   character: DigitalHumanConfig,
   endpoint: { homeserver: string; accessToken: string; userId: string; roomId: string }
 ): Promise<string | null> {
-  const ownerUserId = effectiveOwner() || endpoint.userId;
+  const ownerUserId = effectiveOwner();
   let roomId = endpoint.roomId;
 
   if (!roomId) {
     try {
-      const invite = ownerUserId ? [ownerUserId] : [];
+      const invite = resolveInviteTarget(client.userId, character.name);
       roomId = await client.createRoom({
         // ⚠️ 不设置 m.room.encryption：bot 建房是保证房间明文的关键
         name: character.name,
@@ -879,6 +907,40 @@ async function prepareRoom(
     } catch (err) {
       console.error(`[matrix][${character.name}] 建房失败:`, err);
       return null;
+    }
+  } else {
+    // 自愈：房间已存在但主人还没进来（典型场景：首次启动时未配置主人账号，建房没邀请到人）
+    const invite = resolveInviteTarget(client.userId, character.name);
+    const target = invite[0];
+    if (target) {
+      try {
+        const members = await client.getJoinedMembers(roomId);
+        if (!members.includes(target)) {
+          await client.invite(roomId, target);
+          console.log(`[matrix][${character.name}] 主人 ${target} 尚未在房间内，已补发邀请`);
+        }
+      } catch (err) {
+        // 已被邀请未接受时 invite 会报错，属正常情况，不影响运行
+        console.warn(
+          `[matrix][${character.name}] 补发邀请未成功（可能已邀请待接受，可忽略）:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+  }
+
+  // 自检：主人是否真的在房间里；不在则明确告警，避免"配好了但收不到消息"的静默故障
+  if (ownerUserId) {
+    try {
+      const members = await client.getJoinedMembers(roomId);
+      if (!members.includes(ownerUserId)) {
+        console.warn(
+          `[matrix][${character.name}] ⚠️ 主人 ${ownerUserId} 尚未加入房间 ${roomId}；` +
+            `请到 Element X 接受来自本角色的邀请，然后正常发消息即可。`
+        );
+      }
+    } catch {
+      /* 自检失败不影响运行 */
     }
   }
 
