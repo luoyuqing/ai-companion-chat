@@ -125,8 +125,6 @@ function buildDefaults(): SystemConfig {
   };
 }
 
-let cache: SystemConfig | null = null;
-
 function deepMergeLlm(base: LlmConfig, override?: Partial<LlmConfig>): LlmConfig {
   if (!override) return base;
   return {
@@ -206,8 +204,7 @@ function loadConfig(): SystemConfig {
 }
 
 export function getSystemConfig(): SystemConfig {
-  if (!cache) cache = loadConfig();
-  return cache;
+  return loadConfig();
 }
 
 export function getLlmConfig(): LlmConfig {
@@ -267,7 +264,6 @@ export function saveSystemConfig(input: SystemConfigInput): SystemConfig {
   if (input.prompts !== undefined) {
     (next as { prompts?: unknown }).prompts = input.prompts;
   }
-  cache = next;
   try {
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     const tmp = `${CONFIG_FILE}.tmp`;
@@ -284,7 +280,6 @@ export function resetPrompts(): SystemConfig {
   const current = getSystemConfig();
   const next: SystemConfig = { ...current };
   delete (next as { prompts?: unknown }).prompts;
-  cache = next;
   try {
     fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
     const tmp = `${CONFIG_FILE}.tmp`;
