@@ -1,0 +1,59 @@
+# ══════════════════════════════════════════════════════════════════════
+# AI伴聊 换行符与文本归一策略
+# 建立时间：2026-09-30
+#
+# 目的：
+#   1. 显式声明文本 / 二进制边界，防止二进制文件被误做换行符转换而损坏
+#   2. 仓库内统一以 LF 存储文本，消除各端（Windows 本地 / Linux 服务器 / CI）漂移
+#   3. 不改变现有工作区字节：检出换行符仍遵循各端 core.autocrlf
+#      （本机 Windows 为 CRLF，服务器直接部署为既有 CRLF/LF 混合）
+#
+# 背景：本仓库此前无 .gitattributes，导致同一文件在不同端出现 CRLF/LF 分歧
+#       （2026-09-30 三端一致性核查发现 88 个字节一致、16 个仅换行符差异）。
+# ══════════════════════════════════════════════════════════════════════
+
+# ── 默认：git 自动识别文本文件，仓库内统一按 LF 存储 ──
+* text=auto
+
+# ── 本文件自身固定 LF，避免元文件跨端漂移 ──
+/.gitattributes  text eol=lf
+
+# ── 二进制：禁止任何文本转换与差异比较 ──
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.bmp    binary
+*.ico    binary
+*.mp3    binary
+*.wav    binary
+*.ogg    binary
+*.mp4    binary
+*.mov    binary
+*.webm   binary
+*.zip    binary
+*.gz     binary
+*.7z     binary
+*.ttf    binary
+*.otf    binary
+*.woff   binary
+*.woff2  binary
+*.glb    binary
+*.gltf   binary
+*.pdf    binary
+
+# ── Shell 脚本：强制 LF（CRLF 会导致 bash 报 "$'\r': command not found"）──
+*.sh     text eol=lf
+
+# ── 容器 / 配置：统一 LF，避免跨端解析差异 ──
+*.yaml   text eol=lf
+*.yml    text eol=lf
+
+# ── 明确为文本的资源类型（显式声明，避免自动探测误判）──
+*.svg      text
+*.plist    text
+*.wxml     text
+*.wxss     text
+*.pbxproj  text
+*.storyboard text
